@@ -208,6 +208,7 @@ function ProductsPage() {
   const products = useRows('products');
   const vendors = useRows('vendors');
   const progress = useRows('development_progress');
+  const events = useRows('development_events');
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
@@ -252,7 +253,7 @@ function ProductsPage() {
       <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增商品" />
       {message && <Notice tone="error">{message}</Notice>}
       {products.error && <Notice tone="error">商品資料讀取失敗：{products.error}</Notice>}
-      {progress.error && <Notice tone="error">進度資料讀取失敗：{progress.error}</Notice>}
+      {(progress.error || events.error) && <Notice tone="error">進度資料讀取失敗：{progress.error || events.error}</Notice>}
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
       <Table columns={['SKU', '商品名稱', '分類', '狀態', '最近進度', '廠商', '操作']}>
         {products.loading ? <LoadingRow /> : products.rows.map((row) => (
@@ -261,7 +262,7 @@ function ProductsPage() {
             <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link><p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p></td>
             <td className="p-3">{row.category}</td>
             <td className="p-3">{statusText(row.status)}</td>
-            <td className="p-3"><LatestProgress product={row} progress={progress.rows} /></td>
+            <td className="p-3"><LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} /></td>
             <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
             <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
           </tr>
@@ -276,16 +277,26 @@ function ProductDetailPage() {
   const products = useRows('products');
   const vendors = useRows('vendors');
   const progress = useRows('development_progress');
+  const events = useRows('development_events');
   const costs = useRows('development_costs');
   const product = products.rows.find((p) => p.id === id);
-  const productProgress = progress.rows.filter((p) => p.product_id === id).sort((a, b) => String(a.started_at || a.created_at).localeCompare(String(b.started_at || b.created_at)));
+  const productProgress = mergeProgressRows(id, progress.rows, events.rows).sort((a, b) => String(a.started_at || a.created_at).localeCompare(String(b.started_at || b.created_at)));
   const productCosts = costs.rows.filter((c) => c.product_id === id);
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
 
   async function saveProgress(data: Row) {
-    const payload = clean({
+    const eventPayload = clean({
+      product_id: id,
+      stage: data.stage,
+      title: data.title,
+      note: data.content,
+      started_at: data.started_at || null,
+      due_date: data.expected_completed_at || null,
+      completed_at: data.completed_at || null,
+    });
+    const progressPayload = clean({
       product_id: id,
       stage: data.stage,
       title: data.title,
@@ -295,9 +306,11 @@ function ProductDetailPage() {
       completed_at: data.completed_at || null,
       is_completed: Boolean(data.completed_at),
     });
+    const table = editing?._source === 'development_progress' ? 'development_progress' : 'development_events';
+    const payload = table === 'development_progress' ? progressPayload : eventPayload;
     const { error } = editing?.id
-      ? await supabase!.from('development_progress').update(payload).eq('id', editing.id)
-      : await supabase!.from('development_progress').insert(payload);
+      ? await supabase!.from(table).update(payload).eq('id', editing.id)
+      : await supabase!.from('development_events').insert(eventPayload);
     if (error) {
       setMessage(`進度儲存失敗：${error.message}`);
       return;
@@ -306,12 +319,14 @@ function ProductDetailPage() {
     setOpen(false);
     setMessage('');
     progress.reload();
+    events.reload();
   }
 
   async function removeProgress(row: Row) {
     if (confirm('確定刪除這筆進度嗎？')) {
-      await supabase?.from('development_progress').delete().eq('id', row.id);
+      await supabase?.from(row._source || 'development_events').delete().eq('id', row.id);
       progress.reload();
+      events.reload();
     }
   }
 
@@ -347,7 +362,7 @@ function ProductDetailPage() {
       <section>
         <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增進度" />
         {message && <Notice tone="error">{message}</Notice>}
-        {progress.error && <Notice tone="error">進度資料讀取失敗：{progress.error}</Notice>}
+        {(progress.error || events.error) && <Notice tone="error">進度資料讀取失敗：{progress.error || events.error}</Notice>}
         {open && <ProgressForm row={editing} onCancel={() => setOpen(false)} onSave={saveProgress} />}
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <h3 className="mb-4 font-semibold">進度追蹤 Timeline</h3>
@@ -670,9 +685,7 @@ function Info({ label, value }: { label: string; value: string }) {
 }
 
 function LatestProgress({ product, progress }: { product: Row; progress: Row[] }) {
-  const latest = progress
-    .filter((row) => row.product_id === product.id)
-    .sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)))[0];
+  const latest = progress.sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)))[0];
   if (!latest) return <span className="text-slate-400">{product.current_stage || '尚無進度'}</span>;
   return (
     <div className="max-w-sm">
@@ -681,6 +694,17 @@ function LatestProgress({ product, progress }: { product: Row; progress: Row[] }
       <p className="mt-1 text-xs text-slate-400">{latest.started_at || latest.created_at?.slice(0, 10)}</p>
     </div>
   );
+}
+
+function mergeProgressRows(productId: string | undefined, progressRows: Row[], eventRows: Row[]) {
+  if (!productId) return [];
+  const progress = progressRows
+    .filter((row) => row.product_id === productId)
+    .map((row) => ({ ...row, _source: 'development_progress', content: row.content, expected_completed_at: row.expected_completed_at }));
+  const events = eventRows
+    .filter((row) => row.product_id === productId)
+    .map((row) => ({ ...row, _source: 'development_events', content: row.note, expected_completed_at: row.due_date }));
+  return [...events, ...progress];
 }
 
 function StatusSummary({ rows }: { rows: Array<{ label: string; count: number }> }) {
