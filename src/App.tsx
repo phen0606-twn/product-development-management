@@ -79,18 +79,39 @@ export default function App() {
 
 function Login() {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [sendingLink, setSendingLink] = useState(false);
   const [message, setMessage] = useState('');
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
-    setMessage(error ? error.message : '登入連結已寄出，請到信箱收信。');
+    setMessage('');
+    const { error } = await supabase!.auth.signInWithPassword({ email, password });
+    setMessage(error ? `登入失敗：${error.message}` : '登入成功。');
   }
+
+  async function sendMagicLink() {
+    if (!email) {
+      setMessage('請先輸入 Email。');
+      return;
+    }
+    setSendingLink(true);
+    const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+    setMessage(error ? `寄送失敗：${error.message}` : '登入連結已寄出，請到信箱收信。');
+    setSendingLink(false);
+  }
+
   return (
     <main className="grid min-h-screen place-items-center bg-mist p-6">
       <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-soft">
         <h1 className="text-2xl font-semibold">商品開發管理系統</h1>
+        <p className="mt-2 text-sm text-slate-500">請使用已授權的 Email 與密碼登入。</p>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="mt-5 w-full rounded-md border border-slate-200 px-3 py-2" required />
-        <button className="mt-4 w-full rounded-md bg-leaf px-4 py-2 text-white">寄送登入連結</button>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="密碼" className="mt-3 w-full rounded-md border border-slate-200 px-3 py-2" required />
+        <button className="mt-4 w-full rounded-md bg-leaf px-4 py-2 text-white">登入</button>
+        <button type="button" onClick={sendMagicLink} disabled={sendingLink} className="mt-3 w-full rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-600 disabled:opacity-50">
+          {sendingLink ? '寄送中...' : '改用 Email 登入連結'}
+        </button>
         {message && <p className="mt-4 text-sm text-slate-600">{message}</p>}
       </form>
     </main>
