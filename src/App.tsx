@@ -199,7 +199,7 @@ function Dashboard() {
         <Card label="本月費用" value={formatCurrency(monthCost)} />
         <Card label="本月業績" value={formatCurrency(monthSales)} />
       </div>
-      <Summary title="商品狀態統計" rows={statusRows.map((r) => ({ ...r, revenue: r.quantity, quantity: 0 }))} valueLabel="項" />
+      <StatusSummary rows={statusRows.map((r) => ({ label: r.label, count: r.quantity }))} />
     </Page>
   );
 }
@@ -207,6 +207,7 @@ function Dashboard() {
 function ProductsPage() {
   const products = useRows('products');
   const vendors = useRows('vendors');
+  const progress = useRows('development_progress');
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
 
@@ -244,15 +245,14 @@ function ProductsPage() {
     <Page title="商品管理" subtitle="建立商品、編輯商品、查看詳情與進度">
       <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增商品" />
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
-      <Table columns={['SKU', '商品名稱', '分類', '顏色', '尺寸', '狀態', '廠商', '操作']}>
+      <Table columns={['SKU', '商品名稱', '分類', '狀態', '最近進度', '廠商', '操作']}>
         {products.loading ? <LoadingRow /> : products.rows.map((row) => (
           <tr key={row.id} className="border-t align-top">
             <td className="p-3">{row.sku}</td>
-            <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link></td>
+            <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link><p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p></td>
             <td className="p-3">{row.category}</td>
-            <td className="p-3">{row.color}</td>
-            <td className="p-3">{row.size}</td>
             <td className="p-3">{statusText(row.status)}</td>
+            <td className="p-3"><LatestProgress product={row} progress={progress.rows} /></td>
             <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
             <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
           </tr>
@@ -304,6 +304,7 @@ function ProductDetailPage() {
 
   return (
     <Page title={product.name} subtitle={`${product.sku || '無 SKU'} / ${product.category || '未分類'}`}>
+      <Link to="/products" className="inline-flex w-fit items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">返回商品總表</Link>
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <div className="grid gap-4 md:grid-cols-3">
@@ -388,7 +389,7 @@ function VendorsPage() {
       {open && <VendorForm row={editing} onCancel={() => setOpen(false)} onSave={save} />}
       <div className="grid gap-4">
         {vendors.rows.map((vendor) => {
-          const names = [...new Set(products.rows.filter((p) => p.vendor_id === vendor.id).map((p) => p.name).filter(Boolean))];
+          const vendorProducts = dedupeByName(products.rows.filter((p) => p.vendor_id === vendor.id));
           return (
             <section key={vendor.id} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
               <div className="grid gap-4 md:grid-cols-[1fr_auto]">
@@ -401,7 +402,14 @@ function VendorsPage() {
               </div>
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <Info label="付款資訊" value={vendor.payment_terms || vendor.bank_info || '尚未填寫'} />
-                <Info label="合作商品" value={names.length ? names.join('、') : '尚無合作商品'} />
+                <div>
+                  <p className="text-sm text-slate-500">合作商品</p>
+                  {vendorProducts.length ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {vendorProducts.map((product) => <Link key={product.id} to={`/products/${product.id}`} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-leaf hover:bg-slate-50">{product.name}</Link>)}
+                    </div>
+                  ) : <p className="mt-1 text-sm font-medium text-ink">尚無合作商品</p>}
+                </div>
               </div>
             </section>
           );
@@ -454,6 +462,7 @@ function CostsPage() {
 
   return (
     <Page title="費用管理" subtitle="依付款日統計，支援台幣、美金、人民幣與手續費">
+      <TopLinks links={[['/products', '商品總表'], ['/vendors', '廠商總表']]} />
       <div className="grid gap-3 md:grid-cols-[220px_1fr]">
         <label className="text-sm">選擇月份<input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
         <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增費用" />
@@ -600,7 +609,7 @@ function SalesImportPage() {
     const { error } = await supabase.from('sales_records').insert(rows);
     setMessage(error ? `匯入失敗：${error.message}` : `已匯入 ${rows.length} 筆。`);
   }
-  return <Page title="業績匯入" subtitle="可匯入商品業績或年度橫式表，未建檔商品也會匯入。"><form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><div className="grid gap-3 md:grid-cols-3"><label className="text-sm">匯入月份<input name="month" type="month" defaultValue={new Date().toISOString().slice(0, 7)} className="mt-1 w-full rounded-md border px-3 py-2" /></label><label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" /></label></div><button className="mt-4 rounded-md bg-leaf px-4 py-2 text-white">匯入</button>{message && <p className="mt-3 text-sm text-slate-600">{message}</p>}</form></Page>;
+  return <Page title="業績匯入" subtitle="可匯入商品業績或年度橫式表，未建檔商品也會匯入。"><TopLinks links={[['/sales', '返回業績追蹤']]} /><form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><div className="grid gap-3 md:grid-cols-3"><label className="text-sm">匯入月份<input name="month" type="month" defaultValue={new Date().toISOString().slice(0, 7)} className="mt-1 w-full rounded-md border px-3 py-2" /></label><label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" /></label></div><button className="mt-4 rounded-md bg-leaf px-4 py-2 text-white">匯入</button>{message && <p className="mt-3 text-sm text-slate-600">{message}</p>}</form></Page>;
 }
 
 function Page({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
@@ -609,6 +618,10 @@ function Page({ title, subtitle, children }: { title: string; subtitle: string; 
 
 function Toolbar({ onAdd, label }: { onAdd: () => void; label: string }) {
   return <div className="mb-4 flex justify-end"><button onClick={onAdd} className="inline-flex items-center gap-2 rounded-md bg-leaf px-4 py-2 text-sm text-white"><Plus className="h-4 w-4" />{label}</button></div>;
+}
+
+function TopLinks({ links }: { links: Array<[string, string]> }) {
+  return <div className="flex flex-wrap gap-2">{links.map(([to, label]) => <Link key={to} to={to} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">{label}</Link>)}</div>;
 }
 
 function ActionButtons({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
@@ -635,6 +648,38 @@ function Info({ label, value }: { label: string; value: string }) {
   return <div><p className="text-sm text-slate-500">{label}</p><p className="mt-1 whitespace-pre-wrap text-sm font-medium text-ink">{value}</p></div>;
 }
 
+function LatestProgress({ product, progress }: { product: Row; progress: Row[] }) {
+  const latest = progress
+    .filter((row) => row.product_id === product.id)
+    .sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)))[0];
+  if (!latest) return <span className="text-slate-400">{product.current_stage || '尚無進度'}</span>;
+  return (
+    <div className="max-w-sm">
+      <p className="font-medium text-slate-700">{latest.stage}</p>
+      <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs text-slate-500">{latest.content || latest.title}</p>
+      <p className="mt-1 text-xs text-slate-400">{latest.started_at || latest.created_at?.slice(0, 10)}</p>
+    </div>
+  );
+}
+
+function StatusSummary({ rows }: { rows: Array<{ label: string; count: number }> }) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+      <h3 className="mb-4 font-semibold">商品狀態統計</h3>
+      <div className="grid gap-3 md:grid-cols-4">
+        {rows.length === 0 && <p className="text-sm text-slate-500">尚無資料</p>}
+        {rows.map((row) => (
+          <div key={row.label} className="rounded-md border border-slate-100 p-4">
+            <p className="text-sm text-slate-500">{row.label}</p>
+            <p className="mt-1 text-2xl font-semibold text-ink">{row.count}</p>
+            <p className="text-xs text-slate-400">件</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function Summary({ title, rows, valueLabel }: { title: string; rows: Array<{ label: string; quantity: number; revenue: number; rank?: number }>; valueLabel?: string }) {
   return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><h3 className="mb-4 font-semibold">{title}</h3><div className="space-y-3">{rows.length === 0 && <p className="text-sm text-slate-500">尚無資料</p>}{rows.map((r) => <div key={r.label} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border border-slate-100 p-3 text-sm"><div className="flex gap-3">{r.rank && <span className={`min-w-8 text-2xl font-bold ${r.rank <= 3 ? 'text-coral' : 'text-slate-400'}`}>{r.rank}</span>}<div><p className="font-medium">{r.label}</p><p className="mt-1 text-slate-500">{r.quantity.toLocaleString('zh-TW')} 件</p></div></div><p className="font-semibold text-leaf">{valueLabel ? `${r.revenue} ${valueLabel}` : formatCurrency(r.revenue)}</p></div>)}</div></section>;
 }
@@ -653,6 +698,16 @@ function statusText(value: string) {
 
 function clean(row: Row) {
   return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined));
+}
+
+function dedupeByName(rows: Row[]) {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const name = String(row.name || '').trim();
+    if (!name || seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
 }
 
 function costTotal(row: Row) {
