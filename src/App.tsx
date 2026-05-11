@@ -210,6 +210,7 @@ function ProductsPage() {
   const progress = useRows('development_progress');
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState('');
 
   async function save(data: Row) {
     const payload = clean({
@@ -227,10 +228,16 @@ function ProductsPage() {
       attachment_url: data.attachment_url,
       notes: data.notes,
     });
-    if (editing?.id) await supabase?.from('products').update(payload).eq('id', editing.id);
-    else await supabase?.from('products').insert(payload);
+    const { error } = editing?.id
+      ? await supabase!.from('products').update(payload).eq('id', editing.id)
+      : await supabase!.from('products').insert(payload);
+    if (error) {
+      setMessage(`商品儲存失敗：${error.message}`);
+      return;
+    }
     setOpen(false);
     setEditing(null);
+    setMessage('');
     products.reload();
   }
 
@@ -244,6 +251,9 @@ function ProductsPage() {
   return (
     <Page title="商品管理" subtitle="建立商品、編輯商品、查看詳情與進度">
       <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增商品" />
+      {message && <Notice tone="error">{message}</Notice>}
+      {products.error && <Notice tone="error">商品資料讀取失敗：{products.error}</Notice>}
+      {progress.error && <Notice tone="error">進度資料讀取失敗：{progress.error}</Notice>}
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
       <Table columns={['SKU', '商品名稱', '分類', '狀態', '最近進度', '廠商', '操作']}>
         {products.loading ? <LoadingRow /> : products.rows.map((row) => (
@@ -273,6 +283,7 @@ function ProductDetailPage() {
   const productCosts = costs.rows.filter((c) => c.product_id === id);
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState('');
 
   async function saveProgress(data: Row) {
     const payload = clean({
@@ -285,10 +296,16 @@ function ProductDetailPage() {
       completed_at: data.completed_at || null,
       is_completed: Boolean(data.completed_at),
     });
-    if (editing?.id) await supabase?.from('development_progress').update(payload).eq('id', editing.id);
-    else await supabase?.from('development_progress').insert(payload);
+    const { error } = editing?.id
+      ? await supabase!.from('development_progress').update(payload).eq('id', editing.id)
+      : await supabase!.from('development_progress').insert(payload);
+    if (error) {
+      setMessage(`進度儲存失敗：${error.message}`);
+      return;
+    }
     setEditing(null);
     setOpen(false);
+    setMessage('');
     progress.reload();
   }
 
@@ -330,6 +347,8 @@ function ProductDetailPage() {
 
       <section>
         <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增進度" />
+        {message && <Notice tone="error">{message}</Notice>}
+        {progress.error && <Notice tone="error">進度資料讀取失敗：{progress.error}</Notice>}
         {open && <ProgressForm row={editing} onCancel={() => setOpen(false)} onSave={saveProgress} />}
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <h3 className="mb-4 font-semibold">進度追蹤 Timeline</h3>
@@ -618,6 +637,10 @@ function Page({ title, subtitle, children }: { title: string; subtitle: string; 
 
 function Toolbar({ onAdd, label }: { onAdd: () => void; label: string }) {
   return <div className="mb-4 flex justify-end"><button onClick={onAdd} className="inline-flex items-center gap-2 rounded-md bg-leaf px-4 py-2 text-sm text-white"><Plus className="h-4 w-4" />{label}</button></div>;
+}
+
+function Notice({ children, tone = 'info' }: { children: React.ReactNode; tone?: 'info' | 'error' }) {
+  return <div className={`rounded-md border px-4 py-3 text-sm ${tone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'}`}>{children}</div>;
 }
 
 function TopLinks({ links }: { links: Array<[string, string]> }) {
