@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+.env *
+.DS_Store
+*.local
+*.tsbuildinfo
+outputs
+outputs *
+dist *
+package-lock *.json
+.vite
