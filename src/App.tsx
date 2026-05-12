@@ -1149,6 +1149,9 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
   // When header is first row, file has product-line summary rows that must be skipped
   const hasCategoryRows = headerIndex === 0;
 
+  // Track SKU rows whose revenue must be accumulated from their child store rows
+  const accumulatingProducts = new Set<Row>();
+
   for (const row of rows.slice(dataStart)) {
     const label = String(row[0] || '').trim();
     if (!label || label === '總計') continue;
@@ -1163,13 +1166,20 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
       existing.quantity += quantity;
       existing.revenue += revenue;
       storeTotals.set(key, existing);
+      // When a SKU row had no direct revenue, accumulate from its store rows
+      if (accumulatingProducts.has(currentProduct)) {
+        currentProduct.quantity += quantity;
+        currentProduct.revenue += revenue;
+      }
       continue;
     }
     // Skip product-line category summary rows (e.g. "石墨烯發熱衣BigRed", "PRO折疊套鏡")
     // These appear in the new format and are summaries of the SKU rows that follow them.
     // SKU rows always start with a 2-uppercase-letter + digit product code (e.g. AH1..., AS1...).
     if (hasCategoryRows && !/^[A-Z]{2}\d/.test(label.split(/\s+/)[0] || '')) continue;
-    if (!quantity && !revenue) continue;
+    // Skip zero-revenue rows in the old format (no category rows); in the new format SKU rows
+    // may have null revenue when sales data only appears on child store rows — still track them.
+    if (!hasCategoryRows && !quantity && !revenue) continue;
     const sku = label.split(/\s+/)[0] || '';
     currentProduct = {
       product_id: null,
@@ -1181,6 +1191,7 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
       channel: '全通路',
       notes: '各部門業績明細匯入',
     };
+    if (!quantity && !revenue) accumulatingProducts.add(currentProduct);
     salesRows.push(currentProduct);
   }
 
@@ -1192,7 +1203,7 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
     acc[key].revenue += Number(row.revenue ?? 0);
     return acc;
   }, {} as Record<string, Row>));
-  return { salesRows, channelRows, storeRows };
+  return { salesRows: salesRows.filter((r) => r.quantity || r.revenue), channelRows, storeRows };
 }
 
 function isStoreName(label: string) {
