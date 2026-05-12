@@ -190,7 +190,7 @@ function Dashboard() {
   const delayed = products.rows.filter((p) => p.status === 'delayed').length;
   const monthCost = costs.rows.filter((c) => String(c.paid_at ?? c.created_at).startsWith(month)).reduce((s, c) => s + costTotal(c), 0);
   const monthSales = sales.rows.filter((s) => String(s.sold_at).startsWith(month)).reduce((s, r) => s + Number(r.revenue ?? 0), 0);
-  const statusRows = group(products.rows, (p) => statusText(p.status));
+  const statusRows = groupProductsByStatus(products.rows);
   return (
     <Page title="Dashboard" subtitle="開發商品、費用與業績總覽">
       <div className="grid gap-4 md:grid-cols-4">
@@ -199,7 +199,7 @@ function Dashboard() {
         <Card label="本月費用" value={formatCurrency(monthCost)} />
         <Card label="本月業績" value={formatCurrency(monthSales)} />
       </div>
-      <StatusSummary rows={statusRows.map((r) => ({ label: r.label, count: r.quantity }))} />
+      <StatusSummary rows={statusRows} />
     </Page>
   );
 }
@@ -599,11 +599,19 @@ function SalesPage() {
   const [start, setStart] = useState(`${new Date().toISOString().slice(0, 7)}-01`);
   const [end, setEnd] = useState(new Date().toISOString().slice(0, 10));
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
   const availableMonths = useMemo(() => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(), [sales.rows]);
+  const monthShortcuts = useMemo(() => {
+    const merged = [...recentMonths, ...availableMonths];
+    return [...new Set(merged.filter(Boolean))].slice(0, 6);
+  }, [availableMonths, recentMonths]);
   function chooseMonth(month: string) {
     setSelectedMonth(month);
     setStart(`${month}-01`);
     setEnd(monthEnd(month));
+    const next = [month, ...recentMonths.filter((item) => item !== month)].slice(0, 6);
+    setRecentMonths(next);
+    localStorage.setItem('salesRecentMonths', JSON.stringify(next));
   }
   const records = sales.rows.filter((r) => r.sold_at >= start && r.sold_at <= end);
   const months = monthsInRange(start, end);
@@ -629,7 +637,7 @@ function SalesPage() {
           <Field label="迄日" value={end} onChange={setEnd} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          {availableMonths.slice(0, 6).map((month) => (
+          {monthShortcuts.map((month) => (
             <button key={month} type="button" onClick={() => chooseMonth(month)} className={`rounded-md border px-3 py-1.5 text-sm ${month === selectedMonth ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
               {month.replace('-', '/')}
             </button>
@@ -781,17 +789,26 @@ function mergeProgressRows(productId: string | undefined, progressRows: Row[], e
   return [...events, ...progress];
 }
 
-function StatusSummary({ rows }: { rows: Array<{ label: string; count: number }> }) {
+function StatusSummary({ rows }: { rows: Array<{ label: string; products: Row[] }> }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
       <h3 className="mb-4 font-semibold">商品狀態統計</h3>
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 lg:grid-cols-3">
         {rows.length === 0 && <p className="text-sm text-slate-500">尚無資料</p>}
         {rows.map((row) => (
           <div key={row.label} className="rounded-md border border-slate-100 p-4">
-            <p className="text-sm text-slate-500">{row.label}</p>
-            <p className="mt-1 text-2xl font-semibold text-ink">{row.count}</p>
-            <p className="text-xs text-slate-400">件</p>
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-sm text-slate-500">{row.label}</p>
+              <p className="text-xl font-semibold text-ink">{row.products.length}<span className="ml-1 text-xs font-normal text-slate-400">件</span></p>
+            </div>
+            <div className="mt-3 space-y-2">
+              {row.products.map((product) => (
+                <Link key={product.id} to={`/products/${product.id}`} className="block rounded-md bg-slate-50 px-3 py-2 text-sm text-leaf hover:bg-slate-100">
+                  <span className="font-medium">{product.name}</span>
+                  {product.sku && <span className="ml-2 text-xs text-slate-400">{product.sku}</span>}
+                </Link>
+              ))}
+            </div>
           </div>
         ))}
       </div>
@@ -813,6 +830,25 @@ function ChannelSummary({ rows }: { rows: Array<{ label: string; quantity: numbe
 
 function statusText(value: string) {
   return statusOptions.find(([v]) => v === value)?.[1] ?? value ?? '-';
+}
+
+function groupProductsByStatus(products: Row[]) {
+  const groups = products.reduce((acc, product) => {
+    const label = statusText(product.status);
+    acc[label] ??= { label, products: [] as Row[] };
+    acc[label].products.push(product);
+    return acc;
+  }, {} as Record<string, { label: string; products: Row[] }>);
+  return Object.values(groups).sort((a, b) => b.products.length - a.products.length);
+}
+
+function readRecentMonths() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('salesRecentMonths') || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string').slice(0, 6) : [];
+  } catch {
+    return [];
+  }
 }
 
 function clean(row: Row) {
