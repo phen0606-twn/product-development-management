@@ -414,7 +414,7 @@ function ProductDetailPage() {
                       <table className="w-full min-w-[720px] text-sm">
                         <thead className="bg-white text-slate-500">
                           <tr className="border-b border-slate-100">
-                            {['類型', '說明', '幣別', '原幣金額', '匯率', '手續費', '台幣小計', '狀態'].map((h) => (
+                            {['類型', '說明', '幣別', '金額', '匯率', '手續費', '台幣小計', '狀態'].map((h) => (
                               <th key={h} className="px-4 py-2.5 text-left font-medium">{h}</th>
                             ))}
                           </tr>
@@ -459,7 +459,7 @@ function ProductDetailPage() {
                   <table className="w-full min-w-[720px] text-sm">
                     <thead className="bg-white text-slate-500">
                       <tr className="border-b border-slate-100">
-                        {['類型', '說明', '幣別', '原幣金額', '匯率', '手續費', '台幣小計', '狀態'].map((h) => (
+                        {['類型', '說明', '幣別', '金額', '匯率', '手續費', '台幣小計', '狀態'].map((h) => (
                           <th key={h} className="px-4 py-2.5 text-left font-medium">{h}</th>
                         ))}
                       </tr>
@@ -642,7 +642,7 @@ function CostsPage() {
         <Card label="本月未付款" value={formatCurrency(total - paid)} tone="coral" />
       </div>
       {open && <CostForm row={editing} products={products.rows} batches={batches.rows} onCancel={() => setOpen(false)} onSave={save} />}
-      <Table columns={['付款日', '商品', '類型', '說明', '原幣金額', '匯率', '手續費', '台幣總額', '操作']}>
+      <Table columns={['付款日', '商品', '類型', '說明', '金額', '匯率', '手續費', '台幣總額', '操作']}>
         {monthRows.map((row) => (
           <tr key={row.id} className="border-t align-top">
             <td className="p-3">{row.paid_at}</td>
@@ -697,8 +697,8 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
     ['batch_id', '採購批次', 'select', batches.map((b) => [b.id, b.name || b.batch_no])],
     ['type', '費用類型', 'select', costTypes.map((t) => [t, t])],
     ['custom_type', '其他類型'], ['description', '說明'], ['currency', '幣別', 'select', [['TWD', '台幣'], ['USD', '美金'], ['CNY', '人民幣']]],
-    ['amount', '原幣金額', 'number'], ['exchange_rate_to_twd', '匯率', 'number'], ['bank_fee_twd', '手續費台幣', 'number'],
-    ['paid_amount', '已付款原幣金額', 'number'], ['paid_at', '付款日', 'date'], ['due_date', '到期日', 'date'], ['notes', '備註', 'textarea'],
+    ['amount', '金額', 'number'], ['exchange_rate_to_twd', '匯率', 'number'], ['bank_fee_twd', '手續費台幣', 'number'],
+    ['paid_amount', '已付款金額', 'number'], ['paid_at', '付款日', 'date'], ['due_date', '到期日', 'date'], ['notes', '備註', 'textarea'],
   ]} />;
 }
 
