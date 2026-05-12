@@ -659,6 +659,8 @@ function SalesPage() {
 function SalesImportPage() {
   const [message, setMessage] = useState('');
   const [previewRows, setPreviewRows] = useState<Row[]>([]);
+  const [channelPreviewRows, setChannelPreviewRows] = useState<Row[]>([]);
+  const [storePreviewRows, setStorePreviewRows] = useState<Row[]>([]);
   const [fileName, setFileName] = useState('');
   const totalRevenue = previewRows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
   const totalQuantity = previewRows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
@@ -671,17 +673,25 @@ function SalesImportPage() {
     if (!(file instanceof File)) return;
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-    const rows = parseSales(workbook, XLSX.utils, month);
-    setPreviewRows(rows);
+    const parsed = parseSalesImport(workbook, XLSX.utils, month);
+    setPreviewRows(parsed.salesRows);
+    setChannelPreviewRows(parsed.channelRows);
+    setStorePreviewRows(parsed.storeRows);
     setFileName(file.name);
-    setMessage(rows.length ? `已解析 ${rows.length} 筆，請確認預覽後再匯入。` : '沒有解析到可匯入資料，請確認欄位名稱。');
+    setMessage(parsed.salesRows.length ? `已解析 ${parsed.salesRows.length} 筆商品業績、${parsed.storeRows.length} 筆門市業績，請確認預覽後再匯入。` : '沒有解析到可匯入資料，請確認欄位名稱。');
   }
 
   async function importPreview() {
     if (!supabase || previewRows.length === 0) return;
     const { error } = await supabase.from('sales_records').insert(previewRows);
+    if (!error && channelPreviewRows.length) await supabase.from('channel_sales_records').insert(channelPreviewRows);
+    if (!error && storePreviewRows.length) await supabase.from('channel_store_sales_records').insert(storePreviewRows);
     setMessage(error ? `匯入失敗：${error.message}` : `已匯入 ${previewRows.length} 筆。`);
-    if (!error) setPreviewRows([]);
+    if (!error) {
+      setPreviewRows([]);
+      setChannelPreviewRows([]);
+      setStorePreviewRows([]);
+    }
   }
 
   return (
@@ -703,7 +713,7 @@ function SalesImportPage() {
               <p className="mt-1 text-sm text-slate-500">{fileName} / {previewRows.length.toLocaleString('zh-TW')} 筆 / 數量 {totalQuantity.toLocaleString('zh-TW')} / 金額 {formatCurrency(totalRevenue)}</p>
             </div>
             <div className="flex gap-2">
-              <button type="button" onClick={() => setPreviewRows([])} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
+              <button type="button" onClick={() => { setPreviewRows([]); setChannelPreviewRows([]); setStorePreviewRows([]); }} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
               <button type="button" onClick={importPreview} className="rounded-md bg-leaf px-4 py-2 text-sm text-white">確認匯入</button>
             </div>
           </div>
@@ -720,6 +730,19 @@ function SalesImportPage() {
             ))}
           </Table>
           {previewRows.length > 20 && <p className="mt-3 text-sm text-slate-500">只顯示前 20 筆預覽。</p>}
+          {channelPreviewRows.length > 0 && (
+            <div className="mt-6 grid gap-4 md:grid-cols-3">
+              {channelPreviewRows.map((row) => <Card key={row.channel_category} label={row.channel_category} value={formatCurrency(row.revenue)} helper={`${Number(row.quantity ?? 0).toLocaleString('zh-TW')} 件`} compact />)}
+            </div>
+          )}
+          {storePreviewRows.length > 0 && (
+            <div className="mt-6">
+              <h4 className="mb-3 font-semibold">門市/平台分類預覽</h4>
+              <Table columns={['分類', '門市/平台', '數量', '業績金額']}>
+                {storePreviewRows.slice(0, 20).map((row) => <tr key={`${row.channel_category}-${row.store_name}`} className="border-t"><td className="p-3">{row.channel_category}</td><td className="p-3">{row.store_name}</td><td className="p-3">{row.quantity}</td><td className="p-3">{formatCurrency(row.revenue)}</td></tr>)}
+              </Table>
+            </div>
+          )}
         </section>
       )}
     </Page>
@@ -936,6 +959,84 @@ function salesProductLabel(row: Row) {
 function parseNumber(value: unknown) {
   const n = Number(String(value ?? '').replace(/,/g, '').replace(/%/g, ''));
   return Number.isFinite(n) ? n : 0;
+}
+
+function parseSalesImport(workbook: any, utils: any, fallbackMonth: string) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false }) as unknown[][];
+  const headerIndex = rows.findIndex((r) => r.some((c) => String(c).trim() === '商品') && r.some((c) => String(c).trim() === '實售總金額'));
+  const headers = headerIndex >= 0 ? rows[headerIndex].map((c) => String(c).trim()) : [];
+  if (headers.includes('銷售總成本') && headers.some((h) => h.includes('毛利'))) {
+    return parseDepartmentSales(rows, fallbackMonth);
+  }
+  return { salesRows: parseSales(workbook, utils, fallbackMonth), channelRows: [], storeRows: [] };
+}
+
+function parseDepartmentSales(rows: unknown[][], fallbackMonth: string) {
+  const periodText = String(rows[0]?.[1] || '');
+  const soldAt = periodEndDate(periodText) || monthEnd(fallbackMonth);
+  const salesMonth = `${soldAt.slice(0, 7)}-01`;
+  const salesRows: Row[] = [];
+  const storeTotals = new Map<string, Row>();
+  let currentProduct: Row | null = null;
+
+  for (const row of rows.slice(3)) {
+    const label = String(row[0] || '').trim();
+    if (!label || label === '總計') continue;
+    const quantity = parseNumber(row[1]);
+    const revenue = parseNumber(row[2]);
+    if (isStoreName(label)) {
+      if (!currentProduct || (!quantity && !revenue)) continue;
+      const channel = classifyStore(label);
+      const storeName = label.replace(/^\S+\s*/, '');
+      const key = `${channel}::${storeName}`;
+      const existing = storeTotals.get(key) || { sales_month: salesMonth, channel_category: channel, store_name: storeName, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
+      existing.quantity += quantity;
+      existing.revenue += revenue;
+      storeTotals.set(key, existing);
+      continue;
+    }
+    if (!quantity && !revenue) continue;
+    const sku = label.split(/\s+/)[0] || '';
+    currentProduct = {
+      product_id: null,
+      external_sku: sku,
+      external_product_name: label,
+      sold_at: soldAt,
+      quantity,
+      revenue,
+      channel: '全通路',
+      notes: '各部門業績明細匯入',
+    };
+    salesRows.push(currentProduct);
+  }
+
+  const storeRows = [...storeTotals.values()];
+  const channelRows = Object.values(storeRows.reduce((acc, row) => {
+    const key = row.channel_category;
+    acc[key] ??= { sales_month: salesMonth, channel_category: key, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
+    acc[key].quantity += Number(row.quantity ?? 0);
+    acc[key].revenue += Number(row.revenue ?? 0);
+    return acc;
+  }, {} as Record<string, Row>));
+  return { salesRows, channelRows, storeRows };
+}
+
+function isStoreName(label: string) {
+  return /^(A\d{3}|E\d{3}|000\d{3})\s+/.test(label.trim());
+}
+
+function classifyStore(label: string) {
+  if (/^000|^E\d{3}|網路|平台|MOMO|大紅哥|團購|暫存倉/.test(label)) return '網路官網／平台';
+  if (/捷運|M6/.test(label)) return '捷運門市';
+  return '街邊店';
+}
+
+function periodEndDate(text: string) {
+  const match = text.replace(/\D/g, '').match(/^(\d{4})(\d{2})(\d{2})(\d{4})?(\d{2})(\d{2})$/);
+  if (!match) return '';
+  const year = match[4] ? match[4] : match[1];
+  return `${year}-${match[5]}-${match[6]}`;
 }
 
 function parseSales(workbook: any, utils: any, fallbackMonth: string) {
