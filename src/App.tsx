@@ -731,7 +731,7 @@ function DataForm({ title, row, fields, onSave, onCancel }: { title: string; row
 }
 
 function SalesPage() {
-  const sales = useRows('sales_records');
+  const sales = useRows('sales_records', 'sold_at');
   const targets = useRows('sales_targets');
   const channelSales = useRows('channel_sales_records');
   const stores = useRows('channel_store_sales_records');
