@@ -1131,20 +1131,25 @@ function parseSalesImport(workbook: any, utils: any, fallbackMonth: string) {
   const headerIndex = rows.findIndex((r) => r.some((c) => String(c).trim() === '商品') && r.some((c) => String(c).trim() === '實售總金額'));
   const headers = headerIndex >= 0 ? rows[headerIndex].map((c) => String(c).trim()) : [];
   if (headers.includes('銷售總成本') && headers.some((h) => h.includes('毛利'))) {
-    return parseDepartmentSales(rows, fallbackMonth);
+    return parseDepartmentSales(rows, fallbackMonth, headerIndex);
   }
   return { salesRows: parseSales(workbook, utils, fallbackMonth), channelRows: [], storeRows: [] };
 }
 
-function parseDepartmentSales(rows: unknown[][], fallbackMonth: string) {
-  const periodText = String(rows[0]?.[1] || '');
+function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIndex = -1) {
+  // If header is at row 0, there's no period text row; data starts at row 1
+  const periodText = headerIndex === 0 ? '' : String(rows[0]?.[1] || '');
   const soldAt = periodEndDate(periodText) || monthEnd(fallbackMonth);
   const salesMonth = `${soldAt.slice(0, 7)}-01`;
   const salesRows: Row[] = [];
   const storeTotals = new Map<string, Row>();
   let currentProduct: Row | null = null;
+  // When header is at row 0, data starts at row 1; otherwise skip 3 metadata rows
+  const dataStart = headerIndex >= 0 ? headerIndex + 1 : 3;
+  // When header is first row, file has product-line summary rows that must be skipped
+  const hasCategoryRows = headerIndex === 0;
 
-  for (const row of rows.slice(3)) {
+  for (const row of rows.slice(dataStart)) {
     const label = String(row[0] || '').trim();
     if (!label || label === '總計') continue;
     const quantity = parseNumber(row[1]);
@@ -1160,6 +1165,10 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string) {
       storeTotals.set(key, existing);
       continue;
     }
+    // Skip product-line category summary rows (e.g. "石墨烯發熱衣BigRed", "PRO折疊套鏡")
+    // These appear in the new format and are summaries of the SKU rows that follow them.
+    // SKU rows always start with a 2-uppercase-letter + digit product code (e.g. AH1..., AS1...).
+    if (hasCategoryRows && !/^[A-Z]{2}\d/.test(label.split(/\s+/)[0] || '')) continue;
     if (!quantity && !revenue) continue;
     const sku = label.split(/\s+/)[0] || '';
     currentProduct = {
