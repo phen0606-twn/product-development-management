@@ -220,20 +220,24 @@ function ProductsPage() {
       category: data.category,
       color: data.color,
       size: data.size,
+      season: data.season,
+      owner: data.owner,
+      current_stage: data.current_stage,
       vendor_id: data.vendor_id || null,
       status: data.status || 'planning',
       target_launch_date: data.target_launch_date || null,
+      estimated_retail_price: data.estimated_retail_price ? Number(data.estimated_retail_price) : null,
       spec_summary: data.spec_summary,
       specification_summary: data.spec_summary,
       attachment_url: data.attachment_url,
       notes: data.notes,
     });
-    const { error } = editing?.id
-      ? await supabase!.from('products').update(payload).eq('id', editing.id)
-      : await supabase!.from('products').insert(payload);
-    if (error) {
-      setMessage(`商品儲存失敗：${error.message}`);
-      return;
+    if (editing?.id) {
+      const { error } = await supabase!.from('products').update(payload).eq('id', editing.id);
+      if (error) { setMessage(`商品更新失敗：${error.message}`); return; }
+    } else {
+      const { error } = await supabase!.from('products').insert(payload);
+      if (error) { setMessage(`商品新增失敗：${error.message}`); return; }
     }
     setOpen(false);
     setEditing(null);
@@ -279,9 +283,19 @@ function ProductDetailPage() {
   const progress = useRows('development_progress');
   const events = useRows('development_events');
   const costs = useRows('development_costs');
+  const batches = useRows('product_batches', 'ordered_at');
   const product = products.rows.find((p) => p.id === id);
   const productProgress = mergeProgressRows(id, progress.rows, events.rows).sort((a, b) => String(a.started_at || a.created_at).localeCompare(String(b.started_at || b.created_at)));
   const productCosts = costs.rows.filter((c) => c.product_id === id);
+  const productBatches = batches.rows
+    .filter((b) => b.product_id === id)
+    .sort((a, b) => String(a.ordered_at || '').localeCompare(String(b.ordered_at || '')));
+  const costsByBatch = productCosts.reduce<Record<string, Row[]>>((acc, c) => {
+    const key = c.batch_id ?? '__none__';
+    acc[key] = acc[key] ?? [];
+    acc[key].push(c);
+    return acc;
+  }, {});
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
@@ -353,11 +367,133 @@ function ProductDetailPage() {
           {product.attachment_url && <a href={product.attachment_url} target="_blank" className="mt-4 inline-block text-sm text-leaf hover:underline">開啟附件連結</a>}
         </section>
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <p className="text-sm text-slate-500">此商品費用小計</p>
+          <p className="text-sm text-slate-500">此商品總費用（台幣）</p>
           <p className="mt-1 text-2xl font-semibold">{formatCurrency(productCosts.reduce((s, c) => s + costTotal(c), 0))}</p>
-          <p className="mt-4 text-sm text-slate-500">費用筆數：{productCosts.length}</p>
+          <p className="mt-2 text-sm text-slate-500">費用筆數：{productCosts.length}　批次數：{productBatches.length}</p>
+          <p className="mt-1 text-xs text-slate-400">各批次單位成本詳見下方明細</p>
         </section>
       </div>
+
+      <section>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-base font-semibold text-ink">批次費用明細</h3>
+          <Link to="/costs" className="text-sm text-leaf hover:underline">前往費用管理 →</Link>
+        </div>
+        {(batches.loading || costs.loading) && <p className="text-sm text-slate-400">載入中...</p>}
+        {!batches.loading && !costs.loading && (
+          <div className="space-y-4">
+            {productBatches.map((batch) => {
+              const batchCosts = costsByBatch[batch.id] ?? [];
+              const totalTWD = batchCosts.reduce((s, c) => s + costTotal(c), 0);
+              const paidTWD = batchCosts.filter((c) => c.payment_status === 'paid').reduce((s, c) => s + costTotal(c), 0);
+              const qty = Number(batch.quantity) || 0;
+              const unitCost = qty > 0 ? totalTWD / qty : 0;
+              return (
+                <div key={batch.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
+                  <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 bg-slate-50 px-5 py-4">
+                    <div>
+                      <p className="font-semibold text-ink">{batch.name}</p>
+                      <p className="mt-0.5 text-sm text-slate-500">
+                        下單日：{batch.ordered_at || '-'}　／　數量：<span className="font-medium text-ink">{qty.toLocaleString('zh-TW')} 件</span>
+                      </p>
+                      {batch.notes && <p className="mt-1 text-xs text-slate-400">{batch.notes}</p>}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-slate-500">批次總成本（台幣）</p>
+                      <p className="text-xl font-bold text-ink">{formatCurrency(totalTWD)}</p>
+                      <p className="mt-1 text-sm text-slate-600">單位成本：<span className="font-semibold text-leaf">{formatCurrency(unitCost)}</span></p>
+                      {paidTWD < totalTWD && (
+                        <p className="mt-0.5 text-xs text-amber-500">待付：{formatCurrency(totalTWD - paidTWD)}</p>
+                      )}
+                    </div>
+                  </div>
+                  {batchCosts.length === 0 ? (
+                    <p className="px-5 py-4 text-sm text-slate-400">此批次尚無費用紀錄，請至費用管理新增。</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[720px] text-sm">
+                        <thead className="bg-white text-slate-500">
+                          <tr className="border-b border-slate-100">
+                            {['類型', '說明', '幣別', '原幣金額', '匯率', '手續費', '台幣小計', '狀態'].map((h) => (
+                              <th key={h} className="px-4 py-2.5 text-left font-medium">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {batchCosts.map((c) => (
+                            <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
+                              <td className="px-4 py-2.5 font-medium">{c.custom_type || costTypeLabel(c.type)}</td>
+                              <td className="px-4 py-2.5 text-slate-600">{c.description || '-'}</td>
+                              <td className="px-4 py-2.5">{c.currency}</td>
+                              <td className="px-4 py-2.5">{Number(c.amount ?? 0).toLocaleString('zh-TW', { maximumFractionDigits: 2 })}</td>
+                              <td className="px-4 py-2.5 text-slate-500">{c.exchange_rate_to_twd}</td>
+                              <td className="px-4 py-2.5">{Number(c.bank_fee_twd ?? 0) > 0 ? formatCurrency(c.bank_fee_twd) : '-'}</td>
+                              <td className="px-4 py-2.5 font-semibold">{formatCurrency(costTotal(c))}</td>
+                              <td className="px-4 py-2.5">
+                                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${c.payment_status === 'paid' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-600'}`}>
+                                  {c.payment_status === 'paid' ? '已付款' : '待付款'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot className="border-t-2 border-slate-200 bg-slate-50">
+                          <tr>
+                            <td colSpan={6} className="px-4 py-2.5 text-right text-sm font-medium text-slate-600">批次合計</td>
+                            <td className="px-4 py-2.5 font-bold text-ink">{formatCurrency(totalTWD)}</td>
+                            <td />
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {(costsByBatch['__none__'] ?? []).length > 0 && (
+              <div className="overflow-hidden rounded-lg border border-dashed border-slate-300 bg-white">
+                <div className="border-b border-slate-100 px-5 py-3">
+                  <p className="font-medium text-slate-500">未分配批次的費用</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[720px] text-sm">
+                    <thead className="bg-white text-slate-500">
+                      <tr className="border-b border-slate-100">
+                        {['類型', '說明', '幣別', '原幣金額', '匯率', '手續費', '台幣小計', '狀態'].map((h) => (
+                          <th key={h} className="px-4 py-2.5 text-left font-medium">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(costsByBatch['__none__'] ?? []).map((c) => (
+                        <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
+                          <td className="px-4 py-2.5 font-medium">{c.custom_type || costTypeLabel(c.type)}</td>
+                          <td className="px-4 py-2.5 text-slate-600">{c.description || '-'}</td>
+                          <td className="px-4 py-2.5">{c.currency}</td>
+                          <td className="px-4 py-2.5">{Number(c.amount ?? 0).toLocaleString('zh-TW', { maximumFractionDigits: 2 })}</td>
+                          <td className="px-4 py-2.5 text-slate-500">{c.exchange_rate_to_twd}</td>
+                          <td className="px-4 py-2.5">{Number(c.bank_fee_twd ?? 0) > 0 ? formatCurrency(c.bank_fee_twd) : '-'}</td>
+                          <td className="px-4 py-2.5 font-semibold">{formatCurrency(costTotal(c))}</td>
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${c.payment_status === 'paid' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-600'}`}>
+                              {c.payment_status === 'paid' ? '已付款' : '待付款'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {productBatches.length === 0 && (costsByBatch['__none__'] ?? []).length === 0 && (
+              <p className="rounded-lg border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400">
+                尚無批次或費用紀錄。請至「費用管理」頁面新增費用並指定批次。
+              </p>
+            )}
+          </div>
+        )}
+      </section>
 
       <section>
         <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增進度" />
@@ -455,7 +591,7 @@ function VendorsPage() {
 function CostsPage() {
   const costs = useRows('development_costs');
   const products = useRows('products');
-  const batches = useRows('purchase_batches');
+  const batches = useRows('product_batches', 'ordered_at');
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -526,11 +662,14 @@ function CostsPage() {
 }
 
 function ProductForm({ row, vendors, onSave, onCancel }: { row: Row | null; vendors: Row[]; onSave: (data: Row) => void; onCancel: () => void }) {
-  return <DataForm title={row ? '重新編輯商品' : '新增商品'} row={row} onSave={onSave} onCancel={onCancel} fields={[
+  return <DataForm title={row ? '編輯商品' : '新增商品'} row={row} onSave={onSave} onCancel={onCancel} fields={[
     ['sku', 'SKU'], ['name', '商品名稱', 'required'], ['category', '分類'], ['color', '顏色'], ['size', '尺寸'],
+    ['season', '季節'], ['owner', '負責人'],
     ['vendor_id', '廠商', 'select', vendors.map((v) => [v.id, v.name])],
     ['status', '狀態', 'select', statusOptions.map(([v, l]) => [v, l])],
+    ['current_stage', '目前階段', 'select', stageOptions.map((s) => [s, s])],
     ['target_launch_date', '預計上架日', 'date'],
+    ['estimated_retail_price', '定價', 'number'],
     ['attachment_url', '附件連結'],
     ['spec_summary', '規格摘要', 'textarea'],
     ['notes', '備註', 'textarea'],
@@ -890,6 +1029,14 @@ function dedupeByName(rows: Row[]) {
 
 function costTotal(row: Row) {
   return Number(row.amount ?? 0) * Number(row.exchange_rate_to_twd || 1) + Number(row.bank_fee_twd ?? 0);
+}
+
+function costTypeLabel(type: string) {
+  const map: Record<string, string> = {
+    deposit: '訂金', final_payment: '尾款', shipping_fee: '運費',
+    duty_fee: '關稅', sample_fee: '打樣費', other: '其他',
+  };
+  return map[type] ?? type;
 }
 
 function sum(rows: Row[], key: string) {
