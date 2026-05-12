@@ -614,7 +614,7 @@ function SalesPage() {
   const annualSales = sum(sales.rows.filter((r) => String(r.sold_at).startsWith(start.slice(0, 4))), 'revenue');
   const prevMonth = sumSales(sales.rows, shiftMonth(start, -1), shiftMonth(end, -1));
   const prevYear = sumSales(sales.rows, shiftYear(start, -1), shiftYear(end, -1));
-  const productRows = rank(group(records, (r) => r.external_product_name || r.external_sku || '未建檔商品')).slice(0, 10);
+  const productRows = rank(group(records, salesProductLabel)).slice(0, 10);
   const channelRows = channelData(channelSales.rows, records, months);
   const street = rank(group(stores.rows.filter((r) => r.channel_category === '街邊店' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
   const mrt = rank(group(stores.rows.filter((r) => r.channel_category === '捷運門市' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
@@ -629,7 +629,7 @@ function SalesPage() {
           <Field label="迄日" value={end} onChange={setEnd} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          {availableMonths.slice(0, 12).map((month) => (
+          {availableMonths.slice(0, 6).map((month) => (
             <button key={month} type="button" onClick={() => chooseMonth(month)} className={`rounded-md border px-3 py-1.5 text-sm ${month === selectedMonth ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
               {month.replace('-', '/')}
             </button>
@@ -643,7 +643,7 @@ function SalesPage() {
       </div>
       <section className="grid gap-6 xl:grid-cols-2"><Summary title="商品業績排行" rows={productRows} /><ChannelSummary rows={channelRows} /></section>
       <section className="mt-6 grid gap-6 xl:grid-cols-2"><Summary title="街邊店前五名" rows={street} /><Summary title="捷運門市前五名" rows={mrt} /></section>
-      <div className="mt-6"><Table columns={['日期', '商品', '通路', '數量', '業績金額']}>{records.map((r) => <tr key={r.id} className="border-t"><td className="p-3">{formatFullDate(r.sold_at)}</td><td className="p-3">{r.external_product_name || r.external_sku}</td><td className="p-3">{r.channel}</td><td className="p-3">{r.quantity}</td><td className="p-3">{formatCurrency(r.revenue)}</td></tr>)}</Table></div>
+      <div className="mt-6"><Table columns={['日期', '商品', '通路', '數量', '業績金額']}>{records.map((r) => <tr key={r.id} className="border-t"><td className="p-3">{formatFullDate(r.sold_at)}</td><td className="p-3">{salesProductLabel(r)}</td><td className="p-3">{r.channel}</td><td className="p-3">{r.quantity}</td><td className="p-3">{formatCurrency(r.revenue)}</td></tr>)}</Table></div>
     </Page>
   );
 }
@@ -887,6 +887,14 @@ function rank(rows: Array<{ label: string; quantity: number; revenue: number }>)
 function channelData(channelRows: Row[], salesRows: Row[], months: string[]) {
   const rows = group(channelRows.filter((r) => months.includes(String(r.sales_month).slice(0, 7))), (r) => r.channel_category);
   return rows.length ? rank(rows) : rank(group(salesRows, (r) => r.channel || '未指定'));
+}
+
+function salesProductLabel(row: Row) {
+  const name = String(row.external_product_name || row.product_name || row.name || '').trim();
+  const sku = String(row.external_sku || row.sku || '').trim();
+  const label = name || sku || '未建檔商品';
+  if (name && sku && !name.includes(sku)) return `${sku} ${name}`;
+  return label;
 }
 
 function parseNumber(value: unknown) {
