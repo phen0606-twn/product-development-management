@@ -1000,7 +1000,7 @@ function Summary({ title, rows, valueLabel }: { title: string; rows: Array<{ lab
 }
 
 function ChannelSummary({ rows }: { rows: Array<{ label: string; quantity: number; revenue: number }> }) {
-  const colors = ['#4f8f72', '#ef6f61', '#3b82f6'];
+  const colors = ['#fd5e4b', '#fecf00', '#fd8391', '#fddf98', '#fedbdf'];
   const total = sum(rows, 'revenue');
   let cursor = 0;
   const gradient = rows.map((r, i) => { const start = cursor; cursor += total ? r.revenue / total * 100 : 0; return `${colors[i % colors.length]} ${start}% ${cursor}%`; }).join(', ') || '#e2e8f0 0 100%';
