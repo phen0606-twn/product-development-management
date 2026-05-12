@@ -801,6 +801,8 @@ function SalesImportPage() {
   const [channelPreviewRows, setChannelPreviewRows] = useState<Row[]>([]);
   const [storePreviewRows, setStorePreviewRows] = useState<Row[]>([]);
   const [fileName, setFileName] = useState('');
+  const [importMonth, setImportMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [importing, setImporting] = useState(false);
   const totalRevenue = previewRows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
   const totalQuantity = previewRows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
 
@@ -810,6 +812,7 @@ function SalesImportPage() {
     const file = form.get('file');
     const month = String(form.get('month'));
     if (!(file instanceof File)) return;
+    setImportMonth(month);
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
     const parsed = parseSalesImport(workbook, XLSX.utils, month);
@@ -822,23 +825,36 @@ function SalesImportPage() {
 
   async function importPreview() {
     if (!supabase || previewRows.length === 0) return;
+    setImporting(true);
+    const monthStart = `${importMonth}-01`;
+    const monthEndDate = monthEnd(importMonth);
+    const salesMonth = `${importMonth}-01`;
+
+    // 先刪除同月份舊資料，避免重複計算
+    const { error: delErr1 } = await supabase.from('sales_records').delete().gte('sold_at', monthStart).lte('sold_at', monthEndDate);
+    if (delErr1) { setMessage(`刪除舊業績資料失敗：${delErr1.message}`); setImporting(false); return; }
+    await supabase.from('channel_sales_records').delete().eq('sales_month', salesMonth);
+    await supabase.from('channel_store_sales_records').delete().eq('sales_month', salesMonth);
+
+    // 寫入新資料
     const { error } = await supabase.from('sales_records').insert(previewRows);
     if (!error && channelPreviewRows.length) await supabase.from('channel_sales_records').insert(channelPreviewRows);
     if (!error && storePreviewRows.length) await supabase.from('channel_store_sales_records').insert(storePreviewRows);
-    setMessage(error ? `匯入失敗：${error.message}` : `已匯入 ${previewRows.length} 筆。`);
+    setMessage(error ? `匯入失敗：${error.message}` : `✓ 已覆蓋 ${importMonth} 舊資料，匯入 ${previewRows.length} 筆新業績。`);
     if (!error) {
       setPreviewRows([]);
       setChannelPreviewRows([]);
       setStorePreviewRows([]);
     }
+    setImporting(false);
   }
 
   return (
-    <Page title="業績匯入" subtitle="可匯入商品業績或年度橫式表，未建檔商品也會匯入。">
+    <Page title="業績匯入" subtitle="每週重新上傳同月份資料時，舊資料會自動覆蓋，不會重複計算。">
       <TopLinks links={[['/sales', '返回業績追蹤']]} />
       <form onSubmit={preview} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <div className="grid gap-3 md:grid-cols-3">
-          <label className="text-sm">匯入月份<input name="month" type="month" defaultValue={new Date().toISOString().slice(0, 7)} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
+          <label className="text-sm">匯入月份<input name="month" type="month" defaultValue={importMonth} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
           <label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
         </div>
         <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-white">預覽匯入資料</button>
@@ -850,10 +866,11 @@ function SalesImportPage() {
             <div>
               <h3 className="font-semibold">匯入預覽</h3>
               <p className="mt-1 text-sm text-slate-500">{fileName} / {previewRows.length.toLocaleString('zh-TW')} 筆 / 數量 {totalQuantity.toLocaleString('zh-TW')} / 金額 {formatCurrency(totalRevenue)}</p>
+              <p className="mt-1 text-xs text-amber-600">⚠ 確認匯入後，{importMonth} 的舊業績資料將全部覆蓋</p>
             </div>
             <div className="flex gap-2">
               <button type="button" onClick={() => { setPreviewRows([]); setChannelPreviewRows([]); setStorePreviewRows([]); }} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
-              <button type="button" onClick={importPreview} className="rounded-md bg-leaf px-4 py-2 text-sm text-white">確認匯入</button>
+              <button type="button" onClick={importPreview} disabled={importing} className="rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-50">{importing ? '匯入中...' : '確認匯入'}</button>
             </div>
           </div>
           <Table columns={['日期', 'SKU', '商品', '通路', '數量', '業績金額']}>
