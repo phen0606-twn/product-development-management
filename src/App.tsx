@@ -598,6 +598,13 @@ function SalesPage() {
   const stores = useRows('channel_store_sales_records');
   const [start, setStart] = useState(`${new Date().toISOString().slice(0, 7)}-01`);
   const [end, setEnd] = useState(new Date().toISOString().slice(0, 10));
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const availableMonths = useMemo(() => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(), [sales.rows]);
+  function chooseMonth(month: string) {
+    setSelectedMonth(month);
+    setStart(`${month}-01`);
+    setEnd(monthEnd(month));
+  }
   const records = sales.rows.filter((r) => r.sold_at >= start && r.sold_at <= end);
   const months = monthsInRange(start, end);
   const revenue = sum(records, 'revenue');
@@ -613,7 +620,22 @@ function SalesPage() {
   const mrt = rank(group(stores.rows.filter((r) => r.channel_category === '捷運門市' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
   return (
     <Page title="業績追蹤" subtitle="依日期區間查看業績、目標、MOM、YOY 與排行">
-      <div className="mb-6 grid gap-3 md:grid-cols-3"><Field label="起日" value={start} onChange={setStart} /><Field label="迄日" value={end} onChange={setEnd} /></div>
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="block text-sm">依月份選擇業績
+            <input type="month" value={selectedMonth} onChange={(e) => chooseMonth(e.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2" />
+          </label>
+          <Field label="起日" value={start} onChange={(value) => { setStart(value); setSelectedMonth(value.slice(0, 7)); }} />
+          <Field label="迄日" value={end} onChange={setEnd} />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {availableMonths.slice(0, 12).map((month) => (
+            <button key={month} type="button" onClick={() => chooseMonth(month)} className={`rounded-md border px-3 py-1.5 text-sm ${month === selectedMonth ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+              {month.replace('-', '/')}
+            </button>
+          ))}
+        </div>
+      </section>
       <div className="mb-6 space-y-3">
         <div className="grid gap-3 md:grid-cols-3"><Card label="區間業績" value={formatCurrency(revenue)} compact /><Card label="區間銷售數量" value={qty.toLocaleString('zh-TW')} compact /><Card label="平均單價" value={formatCurrency(qty ? revenue / qty : 0)} compact /></div>
         <div className="grid gap-3 md:grid-cols-5"><Card label="月目標" value={formatCurrency(target)} compact /><Card label="月達成率" value={`${(target ? revenue / target * 100 : 0).toFixed(1)}%`} compact /><Card label="年度目標" value={formatCurrency(annualTarget)} compact /><Card label="年度業績" value={formatCurrency(annualSales)} compact /><Card label="年度達成率" value={growth(annualSales, annualTarget, false)} compact /></div>
@@ -628,9 +650,13 @@ function SalesPage() {
 
 function SalesImportPage() {
   const [message, setMessage] = useState('');
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  const [previewRows, setPreviewRows] = useState<Row[]>([]);
+  const [fileName, setFileName] = useState('');
+  const totalRevenue = previewRows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+  const totalQuantity = previewRows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
+
+  async function preview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!supabase) return;
     const form = new FormData(event.currentTarget);
     const file = form.get('file');
     const month = String(form.get('month'));
@@ -638,10 +664,58 @@ function SalesImportPage() {
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
     const rows = parseSales(workbook, XLSX.utils, month);
-    const { error } = await supabase.from('sales_records').insert(rows);
-    setMessage(error ? `匯入失敗：${error.message}` : `已匯入 ${rows.length} 筆。`);
+    setPreviewRows(rows);
+    setFileName(file.name);
+    setMessage(rows.length ? `已解析 ${rows.length} 筆，請確認預覽後再匯入。` : '沒有解析到可匯入資料，請確認欄位名稱。');
   }
-  return <Page title="業績匯入" subtitle="可匯入商品業績或年度橫式表，未建檔商品也會匯入。"><TopLinks links={[['/sales', '返回業績追蹤']]} /><form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><div className="grid gap-3 md:grid-cols-3"><label className="text-sm">匯入月份<input name="month" type="month" defaultValue={new Date().toISOString().slice(0, 7)} className="mt-1 w-full rounded-md border px-3 py-2" /></label><label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" /></label></div><button className="mt-4 rounded-md bg-leaf px-4 py-2 text-white">匯入</button>{message && <p className="mt-3 text-sm text-slate-600">{message}</p>}</form></Page>;
+
+  async function importPreview() {
+    if (!supabase || previewRows.length === 0) return;
+    const { error } = await supabase.from('sales_records').insert(previewRows);
+    setMessage(error ? `匯入失敗：${error.message}` : `已匯入 ${previewRows.length} 筆。`);
+    if (!error) setPreviewRows([]);
+  }
+
+  return (
+    <Page title="業績匯入" subtitle="可匯入商品業績或年度橫式表，未建檔商品也會匯入。">
+      <TopLinks links={[['/sales', '返回業績追蹤']]} />
+      <form onSubmit={preview} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="text-sm">匯入月份<input name="month" type="month" defaultValue={new Date().toISOString().slice(0, 7)} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
+          <label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
+        </div>
+        <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-white">預覽匯入資料</button>
+        {message && <p className="mt-3 text-sm text-slate-600">{message}</p>}
+      </form>
+      {previewRows.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
+            <div>
+              <h3 className="font-semibold">匯入預覽</h3>
+              <p className="mt-1 text-sm text-slate-500">{fileName} / {previewRows.length.toLocaleString('zh-TW')} 筆 / 數量 {totalQuantity.toLocaleString('zh-TW')} / 金額 {formatCurrency(totalRevenue)}</p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setPreviewRows([])} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
+              <button type="button" onClick={importPreview} className="rounded-md bg-leaf px-4 py-2 text-sm text-white">確認匯入</button>
+            </div>
+          </div>
+          <Table columns={['日期', 'SKU', '商品', '通路', '數量', '業績金額']}>
+            {previewRows.slice(0, 20).map((row, index) => (
+              <tr key={`${row.external_sku}-${index}`} className="border-t">
+                <td className="p-3">{formatFullDate(row.sold_at)}</td>
+                <td className="p-3">{row.external_sku}</td>
+                <td className="p-3">{row.external_product_name}</td>
+                <td className="p-3">{row.channel}</td>
+                <td className="p-3">{Number(row.quantity ?? 0).toLocaleString('zh-TW')}</td>
+                <td className="p-3">{formatCurrency(row.revenue)}</td>
+              </tr>
+            ))}
+          </Table>
+          {previewRows.length > 20 && <p className="mt-3 text-sm text-slate-500">只顯示前 20 筆預覽。</p>}
+        </section>
+      )}
+    </Page>
+  );
 }
 
 function Page({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
