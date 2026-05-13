@@ -804,7 +804,20 @@ function ChannelAnalysisPage() {
   const [selectedSku, setSelectedSku] = useState('');
   const [monthRows, setMonthRows] = useState<Row[]>([]);
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
+  const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
   const [loading, setLoading] = useState(false);
+
+  const monthShortcuts = useMemo(() => {
+    const merged = [...recentMonths, ...availableMonths];
+    return [...new Set(merged.filter(Boolean))].slice(0, 6);
+  }, [recentMonths, availableMonths]);
+
+  function chooseMonth(month: string) {
+    setSelectedMonth(month);
+    const next = [month, ...recentMonths.filter((m) => m !== month)].slice(0, 6);
+    setRecentMonths(next);
+    localStorage.setItem('salesRecentMonths', JSON.stringify(next));
+  }
 
   // Fetch distinct months on mount
   useEffect(() => {
@@ -852,16 +865,16 @@ function ChannelAnalysisPage() {
       <TopLinks links={[['/sales', '返回業績追蹤']]} />
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <label className="block text-sm">選擇月份
-          <input type="month" value={selectedMonth} onChange={(e) => { setSelectedMonth(e.target.value); setSelectedSku(''); }} className="mt-1 w-full max-w-xs rounded-md border border-slate-200 px-3 py-2" />
+          <input type="month" value={selectedMonth} onChange={(e) => chooseMonth(e.target.value)} className="mt-1 w-full max-w-xs rounded-md border border-slate-200 px-3 py-2" />
         </label>
         <div className="mt-3 flex flex-wrap gap-2">
-          {availableMonths.map((m) => (
-            <button key={m} type="button" onClick={() => { setSelectedMonth(m); setSelectedSku(''); }}
+          {monthShortcuts.map((m) => (
+            <button key={m} type="button" onClick={() => chooseMonth(m)}
               className={`rounded-md border px-3 py-1.5 text-sm ${m === selectedMonth ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
               {m.replace('-', '/')}
             </button>
           ))}
-          {availableMonths.length === 0 && <p className="text-sm text-slate-400">尚無資料，請先匯入業績</p>}
+          {monthShortcuts.length === 0 && <p className="text-sm text-slate-400">尚無資料，請先匯入業績</p>}
         </div>
       </section>
 
