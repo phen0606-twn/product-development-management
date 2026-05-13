@@ -623,9 +623,11 @@ function CostsPage() {
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [showUnpaid, setShowUnpaid] = useState(false);
   const monthRows = costs.rows.filter((c) => String(c.paid_at ?? c.created_at).startsWith(month));
   const total = monthRows.reduce((s, c) => s + costTotal(c), 0);
   const paid = monthRows.reduce((s, c) => s + Number(c.paid_amount ?? 0) * Number(c.exchange_rate_to_twd || 1), 0);
+  const unpaidRows = costs.rows.filter((c) => c.payment_status !== 'paid').sort((a, b) => String(a.due_date || a.created_at).localeCompare(String(b.due_date || b.created_at)));
 
   async function save(data: Row) {
     const payload = clean({
@@ -667,8 +669,42 @@ function CostsPage() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card label="本月總成本" value={formatCurrency(total)} />
         <Card label="本月已付款" value={formatCurrency(paid)} />
-        <Card label="本月未付款" value={formatCurrency(total - paid)} tone="coral" />
+        <button type="button" onClick={() => setShowUnpaid(!showUnpaid)} className="text-left">
+          <Card label={`全部未付款${unpaidRows.length ? `（${unpaidRows.length} 筆，點擊查看）` : ''}`} value={formatCurrency(unpaidRows.reduce((s, c) => s + costTotal(c) - Number(c.paid_amount ?? 0) * Number(c.exchange_rate_to_twd || 1), 0))} tone="coral" />
+        </button>
       </div>
+
+      {showUnpaid && (
+        <section className="rounded-lg border border-coral/30 bg-white p-5 shadow-soft">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-coral">未付款明細（共 {unpaidRows.length} 筆）</h3>
+            <button type="button" onClick={() => setShowUnpaid(false)} className="text-sm text-slate-400 hover:text-slate-600">關閉 ✕</button>
+          </div>
+          {unpaidRows.length === 0 ? (
+            <p className="text-sm text-slate-400">目前無未付款項目</p>
+          ) : (
+            <Table columns={['到期日', '商品', '類型', '說明', '台幣金額', '已付', '尚欠', '操作']}>
+              {unpaidRows.map((row) => {
+                const totalTWD = costTotal(row);
+                const paidTWD = Number(row.paid_amount ?? 0) * Number(row.exchange_rate_to_twd || 1);
+                const owingTWD = totalTWD - paidTWD;
+                return (
+                  <tr key={row.id} className="border-t align-top">
+                    <td className="p-3 text-sm">{row.due_date || row.paid_at || '-'}</td>
+                    <td className="p-3 text-sm">{products.rows.find((p) => p.id === row.product_id)?.name || '-'}</td>
+                    <td className="p-3 text-sm">{row.custom_type || row.type}</td>
+                    <td className="p-3 text-sm">{row.description || '-'}</td>
+                    <td className="p-3 text-sm">{formatCurrency(totalTWD)}</td>
+                    <td className="p-3 text-sm text-green-600">{formatCurrency(paidTWD)}</td>
+                    <td className="p-3 text-sm font-semibold text-coral">{formatCurrency(owingTWD)}</td>
+                    <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); setShowUnpaid(false); }} onDelete={() => remove(row)} /></td>
+                  </tr>
+                );
+              })}
+            </Table>
+          )}
+        </section>
+      )}
       {open && <CostForm row={editing} products={products.rows} batches={batches.rows} onCancel={() => setOpen(false)} onSave={save} />}
       <Table columns={['付款日', '商品', '類型', '說明', '金額', '匯率', '手續費', '台幣總額', '操作']}>
         {monthRows.map((row) => (
