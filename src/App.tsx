@@ -1174,6 +1174,52 @@ function InventoryPage() {
   const maxChannelQty = useMemo(() => Math.max(...channelDist.map((c) => c.quantity), 1), [channelDist]);
   const maxDrilldownQty = useMemo(() => Math.max(...channelDrilldown.map((c) => c.qty), 1), [channelDrilldown]);
 
+  // Velocity & turnover days per SKU
+  const skuVelocity = useMemo(() => {
+    // Group sales quantity by SKU × month
+    const bySkuMonth = new Map<string, Map<string, number>>();
+    for (const r of sales.rows) {
+      const sku = String(r.external_sku || '');
+      const month = String(r.sold_at || '').slice(0, 7);
+      if (!sku || !month) continue;
+      const m = bySkuMonth.get(sku) ?? new Map<string, number>();
+      m.set(month, (m.get(month) ?? 0) + Number(r.quantity ?? 0));
+      bySkuMonth.set(sku, m);
+    }
+    const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
+    // Recent 2 months vs prior 3 months for spike detection; last 3 months for daily rate
+    const recent2 = allMonths.slice(-2);
+    const prior3 = allMonths.slice(-5, -2);
+    const last3 = allMonths.slice(-3);
+    const stockMap = new Map(currentBySku.map((inv) => [inv.external_sku, inv.quantity]));
+
+    const result = new Map<string, { daysRemaining: number; spike: boolean; recentAvg: number; prevAvg: number }>();
+    for (const [sku, monthMap] of bySkuMonth) {
+      const recentTotal = recent2.reduce((s, m) => s + (monthMap.get(m) ?? 0), 0);
+      const recentAvg = recent2.length ? recentTotal / recent2.length : 0;
+      const prevTotal = prior3.reduce((s, m) => s + (monthMap.get(m) ?? 0), 0);
+      const prevAvg = prior3.length ? prevTotal / prior3.length : 0;
+      const last3Total = last3.reduce((s, m) => s + (monthMap.get(m) ?? 0), 0);
+      const avgDaily = last3.length ? last3Total / last3.length / 30 : 0;
+      const stock = stockMap.get(sku) ?? 0;
+      const daysRemaining = avgDaily > 0 ? Math.round(stock / avgDaily) : Infinity;
+      const spike = prevAvg > 0 && recentAvg > prevAvg * 1.5;
+      result.set(sku, { daysRemaining, spike, recentAvg, prevAvg });
+    }
+    return result;
+  }, [sales.rows, currentBySku]);
+
+  const reorderAlerts = useMemo(() => {
+    return chartData
+      .map((d) => ({ ...d, v: skuVelocity.get(d.sku) }))
+      .filter(({ v }) => v && (v.daysRemaining < 60 || v.spike))
+      .sort((a, b) => {
+        const da = a.v!.daysRemaining === Infinity ? 9999 : a.v!.daysRemaining;
+        const db = b.v!.daysRemaining === Infinity ? 9999 : b.v!.daysRemaining;
+        return da - db;
+      });
+  }, [chartData, skuVelocity]);
+
   const trimSearch = search.trim();
   const filteredMerged = useMemo(() => {
     if (trimSearch.length < 2) return chartData;
@@ -1301,6 +1347,38 @@ function InventoryPage() {
         </button>
       </div>
 
+      {reorderAlerts.length > 0 && (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
+          <h3 className="mb-3 font-semibold text-amber-800">補貨警示（{reorderAlerts.length} 個 SKU）</h3>
+          <div className="space-y-2">
+            {reorderAlerts.map(({ sku, name, stock, v }) => {
+              const days = v!.daysRemaining;
+              const urgent = days < 30;
+              const caution = days >= 30 && days < 60;
+              return (
+                <div key={sku} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-4 py-2.5 shadow-sm">
+                  <div>
+                    <span className="font-mono text-xs text-slate-400">{sku}</span>
+                    <span className="ml-2 text-sm text-slate-700">{name}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    {v!.spike && (
+                      <span className="rounded-full bg-leaf/10 px-2.5 py-0.5 font-medium text-leaf">
+                        📈 銷量突增（近期 {v!.recentAvg.toFixed(0)} 件/月 vs 前期 {v!.prevAvg.toFixed(0)} 件/月）
+                      </span>
+                    )}
+                    <span className={`rounded-full px-2.5 py-0.5 font-semibold ${urgent ? 'bg-red-100 text-red-600' : caution ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                      {days === Infinity ? '無銷售紀錄' : `剩約 ${days} 天庫存`}
+                    </span>
+                    <span className="text-slate-400">現貨 {stock.toLocaleString('zh-TW')} 件</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {open && (
         <DataForm
           title={editing ? '編輯庫存紀錄' : '新增庫存紀錄'}
@@ -1346,10 +1424,17 @@ function InventoryPage() {
                     <td className="p-3">
                       <button type="button" onClick={() => setExpandedSku(expandedSku === d.sku ? null : d.sku)} className="text-left">
                         <p className="font-mono text-xs text-slate-400">{d.sku}</p>
-                        <p className="text-sm text-leaf hover:underline">{d.name} <span className="text-slate-300 text-xs">{expandedSku === d.sku ? '▲' : '▼'}</span></p>
+                        <p className="text-sm text-leaf hover:underline">
+                          {d.name}
+                          {skuVelocity.get(d.sku)?.spike && <span className="ml-1 text-xs text-leaf">📈</span>}
+                          <span className="text-slate-300 text-xs"> {expandedSku === d.sku ? '▲' : '▼'}</span>
+                        </p>
                       </button>
                     </td>
-                    <td className="p-3 text-right text-sm font-semibold">{d.stock.toLocaleString('zh-TW')}</td>
+                    <td className="p-3 text-right">
+                      <p className="text-sm font-semibold">{d.stock.toLocaleString('zh-TW')}</p>
+                      {(() => { const v = skuVelocity.get(d.sku); if (!v || v.daysRemaining === Infinity) return null; const urgent = v.daysRemaining < 30; const caution = v.daysRemaining < 60; return <p className={`text-xs mt-0.5 ${urgent ? 'text-red-500 font-semibold' : caution ? 'text-amber-500' : 'text-slate-400'}`}>≈ {v.daysRemaining} 天</p>; })()}
+                    </td>
                     <td className="p-3 text-right text-sm text-slate-500">{d.sold.toLocaleString('zh-TW')}</td>
                     <td className="p-3 text-right text-sm">
                       <span className={`font-semibold ${d.rate >= 50 ? 'text-leaf' : 'text-slate-500'}`}>{d.rate.toFixed(1)}%</span>
