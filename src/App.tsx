@@ -308,6 +308,12 @@ function Dashboard() {
     return alerts.sort((a, b) => (a.daysRemaining === Infinity ? 9999 : a.daysRemaining) - (b.daysRemaining === Infinity ? 9999 : b.daysRemaining)).slice(0, 5);
   }, [sales.rows, currentBySku]);
 
+  const today = new Date().toISOString().slice(0, 10);
+  const in60days = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+  const arrivingSoon = products.rows
+    .filter((p) => p.estimated_arrival_date && p.estimated_arrival_date >= today && p.estimated_arrival_date <= in60days)
+    .sort((a, b) => String(a.estimated_arrival_date).localeCompare(String(b.estimated_arrival_date)));
+
   return (
     <Page title="Dashboard" subtitle="開發商品、費用與業績總覽">
       <div className="grid gap-4 md:grid-cols-4">
@@ -317,6 +323,22 @@ function Dashboard() {
         <Card label="本月業績" value={formatCurrency(monthSales)} />
       </div>
       <StatusSummary rows={statusRows} />
+      {arrivingSoon.length > 0 && (
+        <section className="rounded-lg border border-blue-200 bg-blue-50 p-5">
+          <h3 className="mb-3 font-semibold text-blue-800">即將到貨（60 天內）</h3>
+          <div className="space-y-2">
+            {arrivingSoon.map((p) => (
+              <div key={p.id} className="flex items-center justify-between rounded-md bg-white px-4 py-2.5 shadow-sm">
+                <div>
+                  <span className="font-mono text-xs text-slate-400">{p.sku || '-'}</span>
+                  <span className="ml-2 text-sm text-slate-700">{p.name}</span>
+                </div>
+                <span className="text-sm font-semibold text-blue-700">{p.estimated_arrival_date}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       {dashboardAlerts.length > 0 && (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
           <h3 className="mb-3 font-semibold text-amber-800">補貨警示 Top 5</h3>
@@ -373,6 +395,7 @@ function ProductsPage() {
       vendor_id: data.vendor_id || null,
       status: data.status || 'planning',
       target_launch_date: data.target_launch_date || null,
+      estimated_arrival_date: data.estimated_arrival_date || null,
       estimated_retail_price: data.estimated_retail_price ? Number(data.estimated_retail_price) : null,
       spec_summary: data.spec_summary,
       specification_summary: data.spec_summary,
@@ -880,6 +903,7 @@ function ProductForm({ row, vendors, onSave, onCancel }: { row: Row | null; vend
     ['status', '狀態', 'select', statusOptions.map(([v, l]) => [v, l])],
     ['current_stage', '目前階段', 'select', stageOptions.map((s) => [s, s])],
     ['target_launch_date', '預計上架日', 'date'],
+    ['estimated_arrival_date', '預估到貨日', 'date'],
     ['estimated_retail_price', '定價', 'number'],
     ['attachment_url', '附件連結'],
     ['spec_summary', '規格摘要', 'textarea'],
