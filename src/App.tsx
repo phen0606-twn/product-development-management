@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
-import { BarChart3, Boxes, DollarSign, LayoutDashboard, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
 
@@ -13,6 +13,7 @@ const nav = [
   ['/costs', '費用管理', DollarSign],
   ['/sales', '業績追蹤', BarChart3],
   ['/channel-analysis', '通路分析', TrendingUp],
+  ['/inventory', '庫存追蹤', Package],
   ['/sales-import', '業績匯入', Upload],
 ] as const;
 
@@ -79,6 +80,7 @@ export default function App() {
           <Route path="/costs" element={<CostsPage />} />
           <Route path="/sales" element={<SalesPage />} />
           <Route path="/channel-analysis" element={<ChannelAnalysisPage />} />
+          <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/sales-import" element={<SalesImportPage />} />
         </Routes>
       </main>
@@ -926,6 +928,190 @@ function ChannelAnalysisPage() {
           </div>
         )}
       </section>
+    </Page>
+  );
+}
+
+function InventoryPage() {
+  const inventory = useRows('inventory_records', 'recorded_at');
+  const sales = useRows('sales_records', 'sold_at');
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Row | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [message, setMessage] = useState('');
+  const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
+
+  const availableMonths = useMemo(
+    () => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(),
+    [sales.rows],
+  );
+  const monthShortcuts = useMemo(() => {
+    const merged = [...recentMonths, ...availableMonths];
+    return [...new Set(merged.filter(Boolean))].slice(0, 6);
+  }, [recentMonths, availableMonths]);
+  function chooseMonth(month: string) {
+    setSelectedMonth(month);
+    const next = [month, ...recentMonths.filter((m) => m !== month)].slice(0, 6);
+    setRecentMonths(next);
+    localStorage.setItem('salesRecentMonths', JSON.stringify(next));
+  }
+
+  // Latest inventory snapshot per SKU (most recent recorded_at wins)
+  const latestBySku = useMemo(() => {
+    const map = new Map<string, Row>();
+    for (const r of [...inventory.rows].sort((a, b) => String(a.recorded_at).localeCompare(String(b.recorded_at)))) {
+      if (r.external_sku) map.set(String(r.external_sku), r);
+    }
+    return [...map.values()];
+  }, [inventory.rows]);
+
+  // Sold quantity per SKU for the selected month
+  const soldMap = useMemo(() => {
+    const start = `${selectedMonth}-01`;
+    const end = monthEnd(selectedMonth);
+    const map = new Map<string, number>();
+    for (const r of sales.rows.filter((r) => r.sold_at >= start && r.sold_at <= end)) {
+      const sku = String(r.external_sku || '');
+      if (sku) map.set(sku, (map.get(sku) ?? 0) + Number(r.quantity ?? 0));
+    }
+    return map;
+  }, [sales.rows, selectedMonth]);
+
+  const chartData = useMemo(() => {
+    const rows = latestBySku.map((inv) => {
+      const sku = String(inv.external_sku || '');
+      const stock = Number(inv.quantity ?? 0);
+      const sold = soldMap.get(sku) ?? 0;
+      const total = stock + sold;
+      return { sku, name: String(inv.product_name || sku), stock, sold, total, rate: total ? sold / total * 100 : 0 };
+    }).filter((d) => d.stock > 0 || d.sold > 0);
+    return rows.sort((a, b) => b.rate - a.rate);
+  }, [latestBySku, soldMap]);
+
+  const maxTotal = useMemo(() => Math.max(...chartData.map((d) => d.total), 1), [chartData]);
+  const totalStock = useMemo(() => latestBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [latestBySku]);
+  const totalSold = useMemo(() => chartData.reduce((s, d) => s + d.sold, 0), [chartData]);
+  const avgRate = useMemo(() => chartData.length ? chartData.reduce((s, d) => s + d.rate, 0) / chartData.length : 0, [chartData]);
+
+  async function save(data: Row) {
+    if (!supabase) return;
+    const payload = {
+      external_sku: data.external_sku,
+      product_name: data.product_name,
+      location: data.location || '總倉',
+      quantity: Number(data.quantity ?? 0),
+      recorded_at: data.recorded_at || new Date().toISOString().slice(0, 10),
+      notes: data.notes || null,
+    };
+    const { error } = editing?.id
+      ? await supabase.from('inventory_records').update(payload).eq('id', editing.id)
+      : await supabase.from('inventory_records').insert(payload);
+    if (error) { setMessage(`儲存失敗：${error.message}`); return; }
+    setOpen(false); setEditing(null); setMessage(''); inventory.reload();
+  }
+
+  async function del(id: string) {
+    if (!supabase || !confirm('確定刪除此庫存紀錄？')) return;
+    await supabase.from('inventory_records').delete().eq('id', id);
+    inventory.reload();
+  }
+
+  return (
+    <Page title="庫存追蹤" subtitle="各商品庫存分佈與銷售率連動分析">
+      {message && <p className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-600">{message}</p>}
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <p className="mb-3 text-sm font-medium text-slate-500">選擇銷量對比月份</p>
+        <div className="flex flex-wrap gap-2">
+          {monthShortcuts.map((m) => (
+            <button key={m} type="button" onClick={() => chooseMonth(m)}
+              className={`rounded-md border px-3 py-1.5 text-sm ${m === selectedMonth ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+              {m.replace('-', '/')}
+            </button>
+          ))}
+          <input type="month" value={selectedMonth} onChange={(e) => chooseMonth(e.target.value)} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600" />
+        </div>
+      </section>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <Card label="總庫存量" value={`${totalStock.toLocaleString('zh-TW')} 件`} compact />
+        <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact />
+        <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
+      </div>
+
+      {chartData.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold">庫存分佈圖</h3>
+            <div className="flex gap-4 text-xs text-slate-500">
+              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-sun" />剩餘庫存</span>
+              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-leaf" />本月銷量</span>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {chartData.map((d) => (
+              <div key={d.sku}>
+                <div className="mb-1 flex items-center justify-between text-xs">
+                  <span className="max-w-[55%] truncate font-medium text-slate-700" title={`${d.sku} ${d.name}`}>{d.sku} {d.name}</span>
+                  <span className="text-slate-500">庫存 {d.stock.toLocaleString('zh-TW')} 件 ／ 銷量 {d.sold.toLocaleString('zh-TW')} 件 ／ <span className={`font-semibold ${d.rate >= 50 ? 'text-leaf' : 'text-slate-600'}`}>{d.rate.toFixed(1)}%</span></span>
+                </div>
+                <div className="flex h-4 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div style={{ width: `${d.sold / maxTotal * 100}%` }} className="bg-leaf transition-all" />
+                  <div style={{ width: `${d.stock / maxTotal * 100}%` }} className="bg-sun transition-all" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {chartData.length === 0 && !inventory.loading && (
+        <div className="rounded-lg border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
+          尚無庫存資料，請新增庫存紀錄
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold">庫存明細</h3>
+        <button onClick={() => { setEditing(null); setOpen(true); }} className="inline-flex items-center gap-2 rounded-md bg-leaf px-4 py-2 text-sm text-white">
+          <Plus className="h-4 w-4" />新增庫存
+        </button>
+      </div>
+
+      {open && (
+        <DataForm
+          title={editing ? '編輯庫存紀錄' : '新增庫存紀錄'}
+          row={editing}
+          onSave={save}
+          onCancel={() => { setOpen(false); setEditing(null); }}
+          fields={[
+            ['external_sku', 'SKU', 'required'],
+            ['product_name', '商品名稱', 'required'],
+            ['location', '位置（倉庫／門市）'],
+            ['quantity', '數量', 'number'],
+            ['recorded_at', '盤點日期', 'date'],
+            ['notes', '備註', 'textarea'],
+          ]}
+        />
+      )}
+
+      <Table columns={['盤點日期', 'SKU', '商品名稱', '位置', '數量', '操作']}>
+        {inventory.rows.map((r) => (
+          <tr key={r.id} className="border-t hover:bg-slate-50">
+            <td className="p-3 text-sm">{formatFullDate(r.recorded_at)}</td>
+            <td className="p-3 text-sm font-mono">{r.external_sku}</td>
+            <td className="p-3 text-sm">{r.product_name}</td>
+            <td className="p-3 text-sm">{r.location}</td>
+            <td className="p-3 text-sm font-semibold">{Number(r.quantity).toLocaleString('zh-TW')}</td>
+            <td className="p-3">
+              <div className="flex gap-2">
+                <button onClick={() => { setEditing(r); setOpen(true); }} className="rounded p-1 hover:bg-slate-100"><Pencil className="h-4 w-4 text-slate-400" /></button>
+                <button onClick={() => del(r.id)} className="rounded p-1 hover:bg-slate-100"><Trash2 className="h-4 w-4 text-slate-400" /></button>
+              </div>
+            </td>
+          </tr>
+        ))}
+      </Table>
     </Page>
   );
 }
