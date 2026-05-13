@@ -1250,6 +1250,7 @@ function InventoryPage() {
   const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
   const [search, setSearch] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [expandedSku, setExpandedSku] = useState<string | null>(null);
 
@@ -1588,7 +1589,7 @@ function InventoryPage() {
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
           <h3 className="mb-3 font-semibold text-amber-800">補貨警示（{reorderAlerts.length} 個 SKU）</h3>
           <div className="space-y-2">
-            {reorderAlerts.slice(0, 8).map(({ sku, name, stock, v }) => {
+            {(showAllAlerts ? reorderAlerts : reorderAlerts.slice(0, 8)).map(({ sku, name, stock, v }) => {
               const days = v!.daysRemaining;
               const urgent = days < 30;
               const caution = days >= 30 && days < 60;
@@ -1614,7 +1615,10 @@ function InventoryPage() {
             })}
           </div>
           {reorderAlerts.length > 8 && (
-            <p className="mt-3 text-xs text-amber-600">僅顯示前 8 筆，共 {reorderAlerts.length} 個 SKU 需注意</p>
+            <button type="button" onClick={() => setShowAllAlerts(!showAllAlerts)}
+              className="mt-3 w-full rounded-md border border-amber-300 py-2 text-xs text-amber-700 hover:bg-amber-100">
+              {showAllAlerts ? '收起' : `展開全部（共 ${reorderAlerts.length} 個 SKU）`}
+            </button>
           )}
         </section>
       )}
