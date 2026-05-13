@@ -1437,7 +1437,7 @@ function InventoryPage() {
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
           <h3 className="mb-3 font-semibold text-amber-800">補貨警示（{reorderAlerts.length} 個 SKU）</h3>
           <div className="space-y-2">
-            {reorderAlerts.map(({ sku, name, stock, v }) => {
+            {reorderAlerts.slice(0, 8).map(({ sku, name, stock, v }) => {
               const days = v!.daysRemaining;
               const urgent = days < 30;
               const caution = days >= 30 && days < 60;
@@ -1462,6 +1462,9 @@ function InventoryPage() {
               );
             })}
           </div>
+          {reorderAlerts.length > 8 && (
+            <p className="mt-3 text-xs text-amber-600">僅顯示前 8 筆，共 {reorderAlerts.length} 個 SKU 需注意</p>
+          )}
         </section>
       )}
 
