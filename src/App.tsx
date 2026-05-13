@@ -1694,7 +1694,7 @@ function InventoryPage() {
                           <thead>
                             <tr className="text-slate-400">
                               <th className="pb-1 text-left font-normal">位置</th>
-                              <th className="pb-1 text-right font-normal">數量</th>
+                              <th className="pb-1 text-right font-normal">快照數量</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1704,6 +1704,29 @@ function InventoryPage() {
                                 <td className="py-1.5 text-right font-medium text-slate-700">{loc.quantity.toLocaleString('zh-TW')}</td>
                               </tr>
                             ))}
+                            {(() => {
+                              const locs = skuLocations.get(d.sku) ?? [];
+                              const snapshotTotal = locs.reduce((s, l) => s + l.quantity, 0);
+                              const postSales = snapshotTotal - d.stock;
+                              return (
+                                <>
+                                  <tr className="border-t border-slate-200 bg-slate-100">
+                                    <td className="py-1.5 pr-4 font-semibold text-slate-700">快照合計</td>
+                                    <td className="py-1.5 text-right font-semibold text-slate-700">{snapshotTotal.toLocaleString('zh-TW')}</td>
+                                  </tr>
+                                  {postSales > 0 && (
+                                    <tr className="border-t border-slate-100">
+                                      <td className="py-1.5 pr-4 text-slate-400">扣除盤後銷售</td>
+                                      <td className="py-1.5 text-right text-coral">－{postSales.toLocaleString('zh-TW')}</td>
+                                    </tr>
+                                  )}
+                                  <tr className="border-t border-slate-200 bg-amber-50">
+                                    <td className="py-1.5 pr-4 font-semibold text-slate-800">目前估算庫存</td>
+                                    <td className="py-1.5 text-right font-bold text-slate-800">{d.stock.toLocaleString('zh-TW')}</td>
+                                  </tr>
+                                </>
+                              );
+                            })()}
                           </tbody>
                         </table>
                       </td>
