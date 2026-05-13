@@ -1,10 +1,26 @@
-import { Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
+import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
 import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
 
 type Row = Record<string, any>;
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: string }> {
+  state = { error: '' };
+  static getDerivedStateFromError(e: Error) { return { error: e.message }; }
+  render() {
+    if (this.state.error) return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+        <p className="font-semibold">頁面發生錯誤</p>
+        <pre className="mt-2 whitespace-pre-wrap text-xs">{this.state.error}</pre>
+        <button onClick={() => this.setState({ error: '' })} className="mt-3 rounded-md bg-red-100 px-3 py-1 text-xs">重試</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 
 const nav = [
   ['/', 'Dashboard', LayoutDashboard],
@@ -73,15 +89,15 @@ export default function App() {
       </aside>
       <main className="p-5 lg:p-8">
         <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/products" element={<ProductsPage />} />
-          <Route path="/products/:id" element={<ProductDetailPage />} />
-          <Route path="/vendors" element={<VendorsPage />} />
-          <Route path="/costs" element={<CostsPage />} />
-          <Route path="/sales" element={<SalesPage />} />
-          <Route path="/channel-analysis" element={<ChannelAnalysisPage />} />
-          <Route path="/inventory" element={<InventoryPage />} />
-          <Route path="/sales-import" element={<SalesImportPage />} />
+          <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+          <Route path="/products" element={<ErrorBoundary><ProductsPage /></ErrorBoundary>} />
+          <Route path="/products/:id" element={<ErrorBoundary><ProductDetailPage /></ErrorBoundary>} />
+          <Route path="/vendors" element={<ErrorBoundary><VendorsPage /></ErrorBoundary>} />
+          <Route path="/costs" element={<ErrorBoundary><CostsPage /></ErrorBoundary>} />
+          <Route path="/sales" element={<ErrorBoundary><SalesPage /></ErrorBoundary>} />
+          <Route path="/channel-analysis" element={<ErrorBoundary><ChannelAnalysisPage /></ErrorBoundary>} />
+          <Route path="/inventory" element={<ErrorBoundary><InventoryPage /></ErrorBoundary>} />
+          <Route path="/sales-import" element={<ErrorBoundary><SalesImportPage /></ErrorBoundary>} />
         </Routes>
       </main>
     </div>
