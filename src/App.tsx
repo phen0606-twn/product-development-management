@@ -956,13 +956,23 @@ function InventoryPage() {
     localStorage.setItem('salesRecentMonths', JSON.stringify(next));
   }
 
-  // Latest inventory snapshot per SKU (most recent recorded_at wins)
+  // Latest snapshot date per SKU, then sum all locations for that date
   const latestBySku = useMemo(() => {
-    const map = new Map<string, Row>();
-    for (const r of [...inventory.rows].sort((a, b) => String(a.recorded_at).localeCompare(String(b.recorded_at)))) {
-      if (r.external_sku) map.set(String(r.external_sku), r);
+    const latestDate = new Map<string, string>();
+    for (const r of inventory.rows) {
+      const sku = String(r.external_sku || '');
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (sku && (!latestDate.has(sku) || date > latestDate.get(sku)!)) latestDate.set(sku, date);
     }
-    return [...map.values()];
+    const totals = new Map<string, { external_sku: string; product_name: string; quantity: number }>();
+    for (const r of inventory.rows) {
+      const sku = String(r.external_sku || '');
+      if (!sku || String(r.recorded_at || '').slice(0, 10) !== latestDate.get(sku)) continue;
+      const entry = totals.get(sku) ?? { external_sku: sku, product_name: String(r.product_name || sku), quantity: 0 };
+      entry.quantity += Number(r.quantity ?? 0);
+      totals.set(sku, entry);
+    }
+    return [...totals.values()];
   }, [inventory.rows]);
 
   // Sold quantity per SKU for the selected month
