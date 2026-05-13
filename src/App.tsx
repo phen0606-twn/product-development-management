@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
-import { BarChart3, Boxes, DollarSign, LayoutDashboard, Pencil, Plus, Trash2, Upload, Users } from 'lucide-react';
+import { BarChart3, Boxes, DollarSign, LayoutDashboard, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
 
@@ -12,6 +12,7 @@ const nav = [
   ['/vendors', '廠商管理', Users],
   ['/costs', '費用管理', DollarSign],
   ['/sales', '業績追蹤', BarChart3],
+  ['/channel-analysis', '通路分析', TrendingUp],
   ['/sales-import', '業績匯入', Upload],
 ] as const;
 
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/vendors" element={<VendorsPage />} />
           <Route path="/costs" element={<CostsPage />} />
           <Route path="/sales" element={<SalesPage />} />
+          <Route path="/channel-analysis" element={<ChannelAnalysisPage />} />
           <Route path="/sales-import" element={<SalesImportPage />} />
         </Routes>
       </main>
@@ -795,11 +797,120 @@ function SalesPage() {
   );
 }
 
+const CHANNELS = ['網路官網／平台', '街邊店', '捷運門市'] as const;
+
+function ChannelAnalysisPage() {
+  const pss = useRows('product_store_sales', 'sales_month');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [selectedSku, setSelectedSku] = useState('');
+
+  const availableMonths = useMemo(
+    () => [...new Set(pss.rows.map((r) => String(r.sales_month).slice(0, 7)).filter(Boolean))].sort().reverse(),
+    [pss.rows],
+  );
+
+  const monthRows = useMemo(
+    () => pss.rows.filter((r) => String(r.sales_month).slice(0, 7) === selectedMonth),
+    [pss.rows, selectedMonth],
+  );
+
+  const topByChannel = useMemo(
+    () => CHANNELS.map((ch) => ({
+      channel: ch,
+      products: rank(group(monthRows.filter((r) => r.channel_category === ch), (r) => String(r.external_product_name || r.external_sku || '未知'))).slice(0, 3),
+    })),
+    [monthRows],
+  );
+
+  const skuOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of monthRows) {
+      const sku = String(r.external_sku || '');
+      if (sku && !seen.has(sku)) seen.set(sku, String(r.external_product_name || sku));
+    }
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [monthRows]);
+
+  const topStores = useMemo(() => {
+    if (!selectedSku) return [];
+    const rows = monthRows.filter((r) => String(r.external_sku || '') === selectedSku);
+    return rank(group(rows, (r) => `[${r.channel_category}] ${r.store_name}`)).slice(0, 10);
+  }, [monthRows, selectedSku]);
+
+  return (
+    <Page title="通路分析" subtitle="各通路商品銷售前三名、各商品最佳門市排行">
+      <TopLinks links={[['/sales', '返回業績追蹤']]} />
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <label className="block text-sm">選擇月份
+          <input type="month" value={selectedMonth} onChange={(e) => { setSelectedMonth(e.target.value); setSelectedSku(''); }} className="mt-1 w-full max-w-xs rounded-md border border-slate-200 px-3 py-2" />
+        </label>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {availableMonths.map((m) => (
+            <button key={m} type="button" onClick={() => { setSelectedMonth(m); setSelectedSku(''); }}
+              className={`rounded-md border px-3 py-1.5 text-sm ${m === selectedMonth ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+              {m.replace('-', '/')}
+            </button>
+          ))}
+          {availableMonths.length === 0 && <p className="text-sm text-slate-400">尚無資料，請先匯入業績</p>}
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-3 font-semibold">各通路商品前三名</h3>
+        <div className="grid gap-4 md:grid-cols-3">
+          {topByChannel.map(({ channel, products }) => (
+            <div key={channel} className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
+              <p className="mb-3 font-semibold text-leaf">{channel}</p>
+              {products.length === 0
+                ? <p className="text-sm text-slate-400">無資料</p>
+                : products.map((p) => (
+                  <div key={p.label} className="mb-2 flex items-start gap-2 rounded-md border border-slate-100 p-2.5 text-sm">
+                    <span className={`min-w-6 text-xl font-bold leading-none ${p.rank <= 3 ? 'text-coral' : 'text-slate-300'}`}>{p.rank}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words font-medium leading-snug">{p.label}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{p.quantity.toLocaleString('zh-TW')} 件</p>
+                    </div>
+                    <p className="whitespace-nowrap font-semibold text-leaf">{formatCurrency(p.revenue)}</p>
+                  </div>
+                ))}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-4 font-semibold">各商品門市銷售排行</h3>
+        <label className="block text-sm">選擇商品 SKU
+          <select value={selectedSku} onChange={(e) => setSelectedSku(e.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2">
+            <option value="">-- 請選擇商品 --</option>
+            {skuOptions.map(([sku, name]) => <option key={sku} value={sku}>{sku}　{name}</option>)}
+          </select>
+        </label>
+        {selectedSku && (
+          <div className="mt-4 space-y-2">
+            {topStores.length === 0
+              ? <p className="text-sm text-slate-400">此商品無門市資料</p>
+              : topStores.map((s) => (
+                <div key={s.label} className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 rounded-md border border-slate-100 p-3 text-sm">
+                  <span className={`text-xl font-bold ${s.rank <= 3 ? 'text-coral' : 'text-slate-300'}`}>{s.rank}</span>
+                  <p className="break-words">{s.label}</p>
+                  <p className="text-slate-500">{s.quantity.toLocaleString('zh-TW')} 件</p>
+                  <p className="font-semibold text-leaf">{formatCurrency(s.revenue)}</p>
+                </div>
+              ))}
+          </div>
+        )}
+      </section>
+    </Page>
+  );
+}
+
 function SalesImportPage() {
   const [message, setMessage] = useState('');
   const [previewRows, setPreviewRows] = useState<Row[]>([]);
   const [channelPreviewRows, setChannelPreviewRows] = useState<Row[]>([]);
   const [storePreviewRows, setStorePreviewRows] = useState<Row[]>([]);
+  const [productStorePreviewRows, setProductStorePreviewRows] = useState<Row[]>([]);
   const [fileName, setFileName] = useState('');
   const [importMonth, setImportMonth] = useState(new Date().toISOString().slice(0, 7));
   const [importing, setImporting] = useState(false);
@@ -819,6 +930,7 @@ function SalesImportPage() {
     setPreviewRows(parsed.salesRows);
     setChannelPreviewRows(parsed.channelRows);
     setStorePreviewRows(parsed.storeRows);
+    setProductStorePreviewRows(parsed.productStoreRows);
     setFileName(file.name);
     setMessage(parsed.salesRows.length ? `已解析 ${parsed.salesRows.length} 筆商品業績、${parsed.storeRows.length} 筆門市業績，請確認預覽後再匯入。` : '沒有解析到可匯入資料，請確認欄位名稱。');
   }
@@ -835,16 +947,19 @@ function SalesImportPage() {
     if (delErr1) { setMessage(`刪除舊業績資料失敗：${delErr1.message}`); setImporting(false); return; }
     await supabase.from('channel_sales_records').delete().eq('sales_month', salesMonth);
     await supabase.from('channel_store_sales_records').delete().eq('sales_month', salesMonth);
+    await supabase.from('product_store_sales').delete().eq('sales_month', salesMonth);
 
     // 寫入新資料
     const { error } = await supabase.from('sales_records').insert(previewRows);
     if (!error && channelPreviewRows.length) await supabase.from('channel_sales_records').insert(channelPreviewRows);
     if (!error && storePreviewRows.length) await supabase.from('channel_store_sales_records').insert(storePreviewRows);
+    if (!error && productStorePreviewRows.length) await supabase.from('product_store_sales').insert(productStorePreviewRows);
     setMessage(error ? `匯入失敗：${error.message}` : `✓ 已覆蓋 ${importMonth} 舊資料，匯入 ${previewRows.length} 筆新業績。`);
     if (!error) {
       setPreviewRows([]);
       setChannelPreviewRows([]);
       setStorePreviewRows([]);
+      setProductStorePreviewRows([]);
     }
     setImporting(false);
   }
@@ -869,7 +984,7 @@ function SalesImportPage() {
               <p className="mt-1 text-xs text-amber-600">⚠ 確認匯入後，{importMonth} 的舊業績資料將全部覆蓋</p>
             </div>
             <div className="flex gap-2">
-              <button type="button" onClick={() => { setPreviewRows([]); setChannelPreviewRows([]); setStorePreviewRows([]); }} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
+              <button type="button" onClick={() => { setPreviewRows([]); setChannelPreviewRows([]); setStorePreviewRows([]); setProductStorePreviewRows([]); }} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
               <button type="button" onClick={importPreview} disabled={importing} className="rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-50">{importing ? '匯入中...' : '確認匯入'}</button>
             </div>
           </div>
@@ -1133,7 +1248,7 @@ function parseSalesImport(workbook: any, utils: any, fallbackMonth: string) {
   if (headers.includes('銷售總成本') && headers.some((h) => h.includes('毛利'))) {
     return parseDepartmentSales(rows, fallbackMonth, headerIndex);
   }
-  return { salesRows: parseSales(workbook, utils, fallbackMonth), channelRows: [], storeRows: [] };
+  return { salesRows: parseSales(workbook, utils, fallbackMonth), channelRows: [], storeRows: [], productStoreRows: [] };
 }
 
 function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIndex = -1) {
@@ -1149,8 +1264,8 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
   // When header is first row, file has product-line summary rows that must be skipped
   const hasCategoryRows = headerIndex === 0;
 
-  // Track SKU rows whose revenue must be accumulated from their child store rows
   const accumulatingProducts = new Set<Row>();
+  const productStoreRows: Row[] = [];
 
   for (const row of rows.slice(dataStart)) {
     const label = String(row[0] || '').trim();
@@ -1166,7 +1281,15 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
       existing.quantity += quantity;
       existing.revenue += revenue;
       storeTotals.set(key, existing);
-      // When a SKU row had no direct revenue, accumulate from its store rows
+      productStoreRows.push({
+        sales_month: salesMonth,
+        external_sku: String(currentProduct.external_sku || ''),
+        external_product_name: String(currentProduct.external_product_name || ''),
+        channel_category: channel,
+        store_name: storeName,
+        quantity,
+        revenue,
+      });
       if (accumulatingProducts.has(currentProduct)) {
         currentProduct.quantity += quantity;
         currentProduct.revenue += revenue;
@@ -1203,7 +1326,7 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
     acc[key].revenue += Number(row.revenue ?? 0);
     return acc;
   }, {} as Record<string, Row>));
-  return { salesRows: salesRows.filter((r) => r.quantity || r.revenue), channelRows, storeRows };
+  return { salesRows: salesRows.filter((r) => r.quantity || r.revenue), channelRows, storeRows, productStoreRows };
 }
 
 function isStoreName(label: string) {
