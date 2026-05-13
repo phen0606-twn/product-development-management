@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
 import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
@@ -289,7 +289,7 @@ function ProductDetailPage() {
   const costs = useRows('development_costs');
   const batches = useRows('product_batches', 'ordered_at');
   const product = products.rows.find((p) => p.id === id);
-  const productProgress = mergeProgressRows(id, progress.rows, events.rows).sort((a, b) => String(a.started_at || a.created_at).localeCompare(String(b.started_at || b.created_at)));
+  const productProgress = mergeProgressRows(id, progress.rows, events.rows).sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)));
   const productCosts = costs.rows.filter((c) => c.product_id === id);
   const productBatches = batches.rows
     .filter((b) => b.product_id === id)
@@ -963,6 +963,7 @@ function InventoryPage() {
   const [showAllChart, setShowAllChart] = useState(false);
   const [showAllTable, setShowAllTable] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
+  const [expandedSku, setExpandedSku] = useState<string | null>(null);
 
   const availableMonths = useMemo(
     () => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(),
@@ -987,16 +988,56 @@ function InventoryPage() {
       const date = String(r.recorded_at || '').slice(0, 10);
       if (sku && (!latestDate.has(sku) || date > latestDate.get(sku)!)) latestDate.set(sku, date);
     }
-    const totals = new Map<string, { external_sku: string; product_name: string; quantity: number }>();
+    const totals = new Map<string, { external_sku: string; product_name: string; quantity: number; recorded_at: string }>();
     for (const r of inventory.rows) {
       const sku = String(r.external_sku || '');
-      if (!sku || String(r.recorded_at || '').slice(0, 10) !== latestDate.get(sku)) continue;
-      const entry = totals.get(sku) ?? { external_sku: sku, product_name: String(r.product_name || sku), quantity: 0 };
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (!sku || date !== latestDate.get(sku)) continue;
+      const entry = totals.get(sku) ?? { external_sku: sku, product_name: String(r.product_name || sku), quantity: 0, recorded_at: date };
       entry.quantity += Number(r.quantity ?? 0);
       totals.set(sku, entry);
     }
     return [...totals.values()];
   }, [inventory.rows]);
+
+  // Per-location breakdown for each SKU (latest snapshot date only)
+  const skuLocations = useMemo(() => {
+    const latestDate = new Map<string, string>();
+    for (const r of inventory.rows) {
+      const sku = String(r.external_sku || '');
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (sku && (!latestDate.has(sku) || date > latestDate.get(sku)!)) latestDate.set(sku, date);
+    }
+    const map = new Map<string, Array<{ location: string; quantity: number }>>();
+    for (const r of inventory.rows) {
+      const sku = String(r.external_sku || '');
+      if (!sku || String(r.recorded_at || '').slice(0, 10) !== latestDate.get(sku)) continue;
+      const arr = map.get(sku) ?? [];
+      arr.push({ location: String(r.location || '未知'), quantity: Number(r.quantity ?? 0) });
+      map.set(sku, arr);
+    }
+    return map;
+  }, [inventory.rows]);
+
+  // Sales after the snapshot date — subtracted to keep stock current
+  const postSnapshotSoldMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!latestSnapshotDate) return map;
+    for (const r of sales.rows) {
+      if (String(r.sold_at || '').slice(0, 10) <= latestSnapshotDate) continue;
+      const sku = String(r.external_sku || '');
+      if (sku) map.set(sku, (map.get(sku) ?? 0) + Number(r.quantity ?? 0));
+    }
+    return map;
+  }, [sales.rows, latestSnapshotDate]);
+
+  const currentBySku = useMemo(() =>
+    latestBySku.map((inv) => ({
+      ...inv,
+      quantity: Math.max(0, inv.quantity - (postSnapshotSoldMap.get(inv.external_sku) ?? 0)),
+    })),
+    [latestBySku, postSnapshotSoldMap],
+  );
 
   // Sold quantity per SKU for the selected month
   const soldMap = useMemo(() => {
@@ -1011,7 +1052,7 @@ function InventoryPage() {
   }, [sales.rows, selectedMonth]);
 
   const chartData = useMemo(() => {
-    const rows = latestBySku.map((inv) => {
+    const rows = currentBySku.map((inv) => {
       const sku = String(inv.external_sku || '');
       const stock = Number(inv.quantity ?? 0);
       const sold = soldMap.get(sku) ?? 0;
@@ -1019,7 +1060,7 @@ function InventoryPage() {
       return { sku, name: String(inv.product_name || sku), stock, sold, total, rate: total ? sold / total * 100 : 0 };
     }).filter((d) => d.stock > 0 || d.sold > 0);
     return rows.sort((a, b) => b.rate - a.rate);
-  }, [latestBySku, soldMap]);
+  }, [currentBySku, soldMap]);
 
   const skuToCategory = useMemo(() => {
     const map = new Map<string, string>();
@@ -1032,7 +1073,7 @@ function InventoryPage() {
 
   const categoryDist = useMemo(() => {
     const map = new Map<string, number>();
-    for (const inv of latestBySku) {
+    for (const inv of currentBySku) {
       const sku = String(inv.external_sku || '');
       const cat = skuToCategory.get(sku) || '未分類';
       map.set(cat, (map.get(cat) ?? 0) + Number(inv.quantity ?? 0));
@@ -1041,10 +1082,10 @@ function InventoryPage() {
     return [...map.entries()]
       .map(([category, quantity]) => ({ category, quantity, pct: quantity / total * 100 }))
       .sort((a, b) => b.quantity - a.quantity);
-  }, [latestBySku, skuToCategory]);
+  }, [currentBySku, skuToCategory]);
 
   const maxTotal = useMemo(() => Math.max(...chartData.map((d) => d.total), 1), [chartData]);
-  const totalStock = useMemo(() => latestBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [latestBySku]);
+  const totalStock = useMemo(() => currentBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [currentBySku]);
   const totalSold = useMemo(() => chartData.reduce((s, d) => s + d.sold, 0), [chartData]);
   const avgRate = useMemo(() => chartData.length ? chartData.reduce((s, d) => s + d.rate, 0) / chartData.length : 0, [chartData]);
 
@@ -1068,7 +1109,8 @@ function InventoryPage() {
       entry.locations.set(loc, (entry.locations.get(loc) ?? 0) + Number(r.quantity ?? 0));
       map.set(ch, entry);
     }
-    return [...map.values()].sort((a, b) => b.quantity - a.quantity);
+    const SHOWN = new Set(['總倉', '街邊店', '捷運門市', '網路／平台']);
+    return [...map.values()].filter((c) => SHOWN.has(c.channel)).sort((a, b) => b.quantity - a.quantity);
   }, [inventory.rows, latestSnapshotDate]);
 
   const channelDrilldown = useMemo(() => {
@@ -1088,11 +1130,11 @@ function InventoryPage() {
   }, [chartData, trimSearch]);
   const visibleChart = showAllChart ? filteredChart : filteredChart.slice(0, 15);
 
-  const filteredRows = useMemo(() => {
-    if (trimSearch.length < 2) return inventory.rows;
-    return inventory.rows.filter((r) => String(r.external_sku || '').includes(trimSearch) || String(r.product_name || '').includes(trimSearch));
-  }, [inventory.rows, trimSearch]);
-  const visibleRows = showAllTable ? filteredRows : filteredRows.slice(0, 15);
+  const filteredBySku = useMemo(() => {
+    if (trimSearch.length < 2) return currentBySku;
+    return currentBySku.filter((d) => d.external_sku.includes(trimSearch) || d.product_name.includes(trimSearch));
+  }, [currentBySku, trimSearch]);
+  const visibleBySku = showAllTable ? filteredBySku : filteredBySku.slice(0, 15);
 
   async function save(data: Row) {
     if (!supabase) return;
@@ -1143,7 +1185,7 @@ function InventoryPage() {
       </section>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <Card label="總庫存量" value={`${totalStock.toLocaleString('zh-TW')} 件`} compact />
+        <Card label={`目前庫存量${latestSnapshotDate ? `（${latestSnapshotDate} 快照後自動扣銷）` : ''}`} value={`${totalStock.toLocaleString('zh-TW')} 件`} compact />
         <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact />
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
       </div>
@@ -1275,27 +1317,50 @@ function InventoryPage() {
         />
       )}
 
-      <Table columns={['盤點日期', 'SKU', '商品名稱', '位置', '數量', '操作']}>
-        {visibleRows.map((r) => (
-          <tr key={r.id} className="border-t hover:bg-slate-50">
-            <td className="p-3 text-sm">{formatFullDate(r.recorded_at)}</td>
-            <td className="p-3 text-sm font-mono">{r.external_sku}</td>
-            <td className="p-3 text-sm">{r.product_name}</td>
-            <td className="p-3 text-sm">{r.location}</td>
-            <td className="p-3 text-sm font-semibold">{Number(r.quantity).toLocaleString('zh-TW')}</td>
-            <td className="p-3">
-              <div className="flex gap-2">
-                <button onClick={() => { setEditing(r); setOpen(true); }} className="rounded p-1 hover:bg-slate-100"><Pencil className="h-4 w-4 text-slate-400" /></button>
-                <button onClick={() => del(r.id)} className="rounded p-1 hover:bg-slate-100"><Trash2 className="h-4 w-4 text-slate-400" /></button>
-              </div>
-            </td>
-          </tr>
+      <Table columns={['盤點日期', 'SKU', '商品名稱', '目前庫存']}>
+        {visibleBySku.map((inv) => (
+          <Fragment key={inv.external_sku}>
+            <tr className="border-t hover:bg-slate-50">
+              <td className="p-3 text-sm text-slate-500">{formatFullDate(inv.recorded_at)}</td>
+              <td className="p-3 text-sm font-mono">{inv.external_sku}</td>
+              <td className="p-3 text-sm">
+                <button type="button" onClick={() => setExpandedSku(expandedSku === inv.external_sku ? null : inv.external_sku)}
+                  className="text-left text-leaf hover:underline">
+                  {inv.product_name} <span className="text-slate-400">{expandedSku === inv.external_sku ? '▲' : '▼'}</span>
+                </button>
+              </td>
+              <td className="p-3 text-sm font-semibold">{inv.quantity.toLocaleString('zh-TW')} 件</td>
+            </tr>
+            {expandedSku === inv.external_sku && (
+              <tr>
+                <td colSpan={4} className="bg-slate-50 px-6 pb-4 pt-2">
+                  <p className="mb-2 text-xs font-medium text-slate-400">各位置庫存明細（快照 {inv.recorded_at}）</p>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-slate-400">
+                        <th className="pb-1 text-left font-normal">位置</th>
+                        <th className="pb-1 text-right font-normal">數量</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(skuLocations.get(inv.external_sku) ?? []).sort((a, b) => b.quantity - a.quantity).map((loc) => (
+                        <tr key={loc.location} className="border-t border-slate-100">
+                          <td className="py-1.5 pr-4 text-slate-600">{loc.location}</td>
+                          <td className="py-1.5 text-right font-medium text-slate-700">{loc.quantity.toLocaleString('zh-TW')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </td>
+              </tr>
+            )}
+          </Fragment>
         ))}
       </Table>
-      {filteredRows.length > 15 && (
+      {filteredBySku.length > 15 && (
         <button type="button" onClick={() => setShowAllTable(!showAllTable)}
           className="w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
-          {showAllTable ? '收起' : `展開全部（共 ${filteredRows.length} 筆）`}
+          {showAllTable ? '收起' : `展開全部（共 ${filteredBySku.length} 個 SKU）`}
         </button>
       )}
     </Page>
