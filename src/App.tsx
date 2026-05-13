@@ -324,11 +324,19 @@ function ProductDetailPage() {
       completed_at: data.completed_at || null,
       is_completed: Boolean(data.completed_at),
     });
-    const table = editing?._source === 'development_progress' ? 'development_progress' : 'development_events';
-    const payload = table === 'development_progress' ? progressPayload : eventPayload;
-    const { error } = editing?.id
-      ? await supabase!.from(table).update(payload).eq('id', editing.id)
-      : await supabase!.from('development_events').insert(eventPayload);
+    let error: any = null;
+    if (editing?.id) {
+      if (editing._source === 'development_events') {
+        // Migrate legacy development_events record to development_progress to avoid enum constraint
+        const { error: delErr } = await supabase!.from('development_events').delete().eq('id', editing.id);
+        if (delErr) { setMessage(`進度儲存失敗：${delErr.message}`); return; }
+        ({ error } = await supabase!.from('development_progress').insert(progressPayload));
+      } else {
+        ({ error } = await supabase!.from('development_progress').update(progressPayload).eq('id', editing.id));
+      }
+    } else {
+      ({ error } = await supabase!.from('development_progress').insert(progressPayload));
+    }
     if (error) {
       setMessage(`進度儲存失敗：${error.message}`);
       return;
