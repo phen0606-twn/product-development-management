@@ -854,7 +854,7 @@ function SalesPage() {
       </div>
       <section className="grid gap-6 xl:grid-cols-2"><Summary title="商品業績排行" rows={productRows} /><ChannelSummary rows={channelRows} /></section>
       <section className="mt-6 grid gap-6 xl:grid-cols-2"><Summary title="街邊店前五名" rows={street} /><Summary title="捷運門市前五名" rows={mrt} /></section>
-      <div className="mt-6"><Table columns={['日期', '商品', '通路', '數量', '業績金額']}>{records.map((r) => <tr key={r.id} className="border-t"><td className="p-3">{formatFullDate(r.sold_at)}</td><td className="p-3">{salesProductLabel(r)}</td><td className="p-3">{r.channel}</td><td className="p-3">{r.quantity}</td><td className="p-3">{formatCurrency(r.revenue)}</td></tr>)}</Table></div>
+      <SalesRecordsTable records={records} />
     </Page>
   );
 }
@@ -1689,6 +1689,32 @@ function StatusSummary({ rows }: { rows: Array<{ label: string; products: Row[] 
         ))}
       </div>
     </section>
+  );
+}
+
+function SalesRecordsTable({ records }: { records: Row[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? records : records.slice(0, 10);
+  return (
+    <div className="mt-6">
+      <Table columns={['日期', '商品', '通路', '數量', '業績金額']}>
+        {visible.map((r) => (
+          <tr key={r.id} className="border-t">
+            <td className="p-3">{formatFullDate(r.sold_at)}</td>
+            <td className="p-3">{salesProductLabel(r)}</td>
+            <td className="p-3">{r.channel}</td>
+            <td className="p-3">{r.quantity}</td>
+            <td className="p-3">{formatCurrency(r.revenue)}</td>
+          </tr>
+        ))}
+      </Table>
+      {records.length > 10 && (
+        <button type="button" onClick={() => setShowAll(!showAll)}
+          className="mt-2 w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
+          {showAll ? '收起' : `展開全部（共 ${records.length} 筆）`}
+        </button>
+      )}
+    </div>
   );
 }
 
