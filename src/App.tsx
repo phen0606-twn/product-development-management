@@ -1012,8 +1012,7 @@ function InventoryPage() {
   const [message, setMessage] = useState('');
   const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
   const [search, setSearch] = useState('');
-  const [showAllChart, setShowAllChart] = useState(false);
-  const [showAllTable, setShowAllTable] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [expandedSku, setExpandedSku] = useState<string | null>(null);
 
@@ -1176,17 +1175,11 @@ function InventoryPage() {
   const maxDrilldownQty = useMemo(() => Math.max(...channelDrilldown.map((c) => c.qty), 1), [channelDrilldown]);
 
   const trimSearch = search.trim();
-  const filteredChart = useMemo(() => {
+  const filteredMerged = useMemo(() => {
     if (trimSearch.length < 2) return chartData;
     return chartData.filter((d) => d.sku.includes(trimSearch) || d.name.includes(trimSearch));
   }, [chartData, trimSearch]);
-  const visibleChart = showAllChart ? filteredChart : filteredChart.slice(0, 15);
-
-  const filteredBySku = useMemo(() => {
-    if (trimSearch.length < 2) return currentBySku;
-    return currentBySku.filter((d) => d.external_sku.includes(trimSearch) || d.product_name.includes(trimSearch));
-  }, [currentBySku, trimSearch]);
-  const visibleBySku = showAllTable ? filteredBySku : filteredBySku.slice(0, 15);
+  const visibleMerged = showAll ? filteredMerged : filteredMerged.slice(0, 15);
 
   async function save(data: Row) {
     if (!supabase) return;
@@ -1218,7 +1211,7 @@ function InventoryPage() {
       <input
         type="text"
         value={search}
-        onChange={(e) => { setSearch(e.target.value); setShowAllChart(false); setShowAllTable(false); }}
+        onChange={(e) => { setSearch(e.target.value); setShowAll(false); }}
         placeholder="搜尋商品名稱或貨號（輸入 2 字以上）"
         className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 shadow-soft placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-leaf"
       />
@@ -1301,50 +1294,6 @@ function InventoryPage() {
         </section>
       )}
 
-      {filteredChart.length > 0 && (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="font-semibold">庫存分佈圖</h3>
-            <div className="flex gap-4 text-xs text-slate-500">
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-sun" />剩餘庫存</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm bg-leaf" />本月銷量</span>
-            </div>
-          </div>
-          <div className="space-y-3">
-            {visibleChart.map((d) => (
-              <div key={d.sku}>
-                <div className="mb-1 flex items-center justify-between text-xs">
-                  <span className="max-w-[55%] truncate font-medium text-slate-700" title={`${d.sku} ${d.name}`}>{d.sku} {d.name}</span>
-                  <span className="text-slate-500">庫存 {d.stock.toLocaleString('zh-TW')} 件 ／ 銷量 {d.sold.toLocaleString('zh-TW')} 件 ／ <span className={`font-semibold ${d.rate >= 50 ? 'text-leaf' : 'text-slate-600'}`}>{d.rate.toFixed(1)}%</span></span>
-                </div>
-                <div className="flex h-4 w-full overflow-hidden rounded-full bg-slate-100">
-                  <div style={{ width: `${d.sold / maxTotal * 100}%` }} className="bg-leaf transition-all" />
-                  <div style={{ width: `${d.stock / maxTotal * 100}%` }} className="bg-sun transition-all" />
-                </div>
-              </div>
-            ))}
-          </div>
-          {filteredChart.length > 15 && (
-            <button type="button" onClick={() => setShowAllChart(!showAllChart)}
-              className="mt-4 w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
-              {showAllChart ? '收起' : `展開全部（共 ${filteredChart.length} 個 SKU）`}
-            </button>
-          )}
-        </section>
-      )}
-
-      {filteredChart.length === 0 && trimSearch.length >= 2 && (
-        <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
-          找不到符合「{trimSearch}」的商品
-        </div>
-      )}
-
-      {chartData.length === 0 && !inventory.loading && trimSearch.length < 2 && (
-        <div className="rounded-lg border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
-          尚無庫存資料，請新增庫存紀錄
-        </div>
-      )}
-
       <div className="flex items-center justify-between">
         <h3 className="font-semibold">庫存明細</h3>
         <button onClick={() => { setEditing(null); setOpen(true); }} className="inline-flex items-center gap-2 rounded-md bg-leaf px-4 py-2 text-sm text-white">
@@ -1369,51 +1318,85 @@ function InventoryPage() {
         />
       )}
 
-      <Table columns={['盤點日期', 'SKU', '商品名稱', '目前庫存']}>
-        {visibleBySku.map((inv) => (
-          <Fragment key={inv.external_sku}>
-            <tr className="border-t hover:bg-slate-50">
-              <td className="p-3 text-sm text-slate-500">{formatFullDate(inv.recorded_at)}</td>
-              <td className="p-3 text-sm font-mono">{inv.external_sku}</td>
-              <td className="p-3 text-sm">
-                <button type="button" onClick={() => setExpandedSku(expandedSku === inv.external_sku ? null : inv.external_sku)}
-                  className="text-left text-leaf hover:underline">
-                  {inv.product_name} <span className="text-slate-400">{expandedSku === inv.external_sku ? '▲' : '▼'}</span>
-                </button>
-              </td>
-              <td className="p-3 text-sm font-semibold">{inv.quantity.toLocaleString('zh-TW')} 件</td>
-            </tr>
-            {expandedSku === inv.external_sku && (
-              <tr>
-                <td colSpan={4} className="bg-slate-50 px-6 pb-4 pt-2">
-                  <p className="mb-2 text-xs font-medium text-slate-400">各位置庫存明細（快照 {inv.recorded_at}）</p>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-slate-400">
-                        <th className="pb-1 text-left font-normal">位置</th>
-                        <th className="pb-1 text-right font-normal">數量</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(skuLocations.get(inv.external_sku) ?? []).sort((a, b) => b.quantity - a.quantity).map((loc) => (
-                        <tr key={loc.location} className="border-t border-slate-100">
-                          <td className="py-1.5 pr-4 text-slate-600">{loc.location}</td>
-                          <td className="py-1.5 text-right font-medium text-slate-700">{loc.quantity.toLocaleString('zh-TW')}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </td>
+      {filteredMerged.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
+          {trimSearch.length >= 2 ? `找不到符合「${trimSearch}」的商品` : '尚無庫存資料，請新增庫存紀錄'}
+        </div>
+      ) : (
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
+          <div className="flex items-center gap-4 border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
+            <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-leaf" />本月銷量</span>
+            <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-sun" />剩餘庫存</span>
+            <span className="ml-auto text-slate-400">點商品名稱展開位置明細</span>
+          </div>
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-slate-100 text-xs text-slate-500">
+                <th className="p-3 text-left font-medium">SKU / 商品名稱</th>
+                <th className="p-3 text-right font-medium">目前庫存</th>
+                <th className="p-3 text-right font-medium">本月銷量</th>
+                <th className="p-3 text-right font-medium">銷售率</th>
+                <th className="w-32 p-3 font-medium">分佈</th>
               </tr>
-            )}
-          </Fragment>
-        ))}
-      </Table>
-      {filteredBySku.length > 15 && (
-        <button type="button" onClick={() => setShowAllTable(!showAllTable)}
-          className="w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
-          {showAllTable ? '收起' : `展開全部（共 ${filteredBySku.length} 個 SKU）`}
-        </button>
+            </thead>
+            <tbody>
+              {visibleMerged.map((d) => (
+                <Fragment key={d.sku}>
+                  <tr className="border-t hover:bg-slate-50">
+                    <td className="p-3">
+                      <button type="button" onClick={() => setExpandedSku(expandedSku === d.sku ? null : d.sku)} className="text-left">
+                        <p className="font-mono text-xs text-slate-400">{d.sku}</p>
+                        <p className="text-sm text-leaf hover:underline">{d.name} <span className="text-slate-300 text-xs">{expandedSku === d.sku ? '▲' : '▼'}</span></p>
+                      </button>
+                    </td>
+                    <td className="p-3 text-right text-sm font-semibold">{d.stock.toLocaleString('zh-TW')}</td>
+                    <td className="p-3 text-right text-sm text-slate-500">{d.sold.toLocaleString('zh-TW')}</td>
+                    <td className="p-3 text-right text-sm">
+                      <span className={`font-semibold ${d.rate >= 50 ? 'text-leaf' : 'text-slate-500'}`}>{d.rate.toFixed(1)}%</span>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
+                        <div style={{ width: `${d.sold / maxTotal * 100}%` }} className="bg-leaf transition-all" />
+                        <div style={{ width: `${d.stock / maxTotal * 100}%` }} className="bg-sun transition-all" />
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedSku === d.sku && (
+                    <tr>
+                      <td colSpan={5} className="bg-slate-50 px-6 pb-4 pt-2">
+                        <p className="mb-2 text-xs font-medium text-slate-400">各位置庫存（快照 {latestSnapshotDate}）</p>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-slate-400">
+                              <th className="pb-1 text-left font-normal">位置</th>
+                              <th className="pb-1 text-right font-normal">數量</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(skuLocations.get(d.sku) ?? []).sort((a, b) => b.quantity - a.quantity).map((loc) => (
+                              <tr key={loc.location} className="border-t border-slate-100">
+                                <td className="py-1.5 pr-4 text-slate-600">{loc.location}</td>
+                                <td className="py-1.5 text-right font-medium text-slate-700">{loc.quantity.toLocaleString('zh-TW')}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+          {filteredMerged.length > 15 && (
+            <div className="border-t p-3">
+              <button type="button" onClick={() => setShowAll(!showAll)}
+                className="w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
+                {showAll ? '收起' : `展開全部（共 ${filteredMerged.length} 個 SKU）`}
+              </button>
+            </div>
+          )}
+        </section>
       )}
     </Page>
   );
