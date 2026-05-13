@@ -282,7 +282,16 @@ function Dashboard() {
       bySkuMonth.set(sku, m);
     }
     const stockMap = new Map(currentBySku.map((inv) => [inv.external_sku, inv.quantity]));
-    const nameMap = new Map(currentBySku.map((inv) => [inv.external_sku, inv.product_name]));
+    // Build name map: prefer sales records (has Chinese name), fall back to inventory product_name
+    const nameMap = new Map<string, string>();
+    for (const r of sales.rows) {
+      const sku = String(r.external_sku || '');
+      const pname = String(r.external_product_name || '');
+      if (sku && pname && !nameMap.has(sku)) nameMap.set(sku, pname);
+    }
+    for (const inv of currentBySku) {
+      if (!nameMap.has(inv.external_sku)) nameMap.set(inv.external_sku, String(inv.product_name || inv.external_sku));
+    }
     const alerts: Array<{ sku: string; name: string; stock: number; daysRemaining: number; spike: boolean; recentAvg: number; prevAvg: number }> = [];
     for (const [sku, monthMap] of bySkuMonth) {
       const recentAvg = recent2.length ? recent2.reduce((s, m) => s + (monthMap.get(m) ?? 0), 0) / recent2.length : 0;
