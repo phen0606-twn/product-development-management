@@ -266,8 +266,14 @@ function ProductsPage() {
   }
 
   async function remove(row: Row) {
-    if (confirm(`確定刪除「${row.name}」嗎？`)) {
-      await supabase?.from('products').delete().eq('id', row.id);
+    if (!supabase) return;
+    const { count } = await supabase
+      .from('development_progress')
+      .select('id', { count: 'exact', head: true })
+      .eq('product_id', row.id);
+    const progressNote = count ? `\n此操作將同時刪除 ${count} 筆開發進度記錄，無法還原。` : '';
+    if (confirm(`確定刪除「${row.name}」嗎？${progressNote}`)) {
+      await supabase.from('products').delete().eq('id', row.id);
       products.reload();
     }
   }
@@ -532,16 +538,24 @@ function ProductDetailPage() {
           <h3 className="mb-4 font-semibold">進度追蹤 Timeline</h3>
           <div className="space-y-4">
             {productProgress.length === 0 && <p className="text-sm text-slate-500">尚無進度紀錄</p>}
-            {productProgress.map((row) => (
-              <div key={row.id} className="grid gap-3 border-l-4 border-leaf bg-slate-50 p-4 md:grid-cols-[1fr_auto]">
-                <div>
-                  <p className="font-medium">{row.stage} {row.title ? ` / ${row.title}` : ''}</p>
-                  <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{row.content}</p>
-                  <p className="mt-2 text-xs text-slate-500">日期：{row.started_at || '-'}　預計完成：{row.expected_completed_at || '-'}　完成日：{row.completed_at || '-'}</p>
+            {productProgress.map((row) => {
+              const progressOverdue = !row.completed_at && dueDateStatus(row.expected_completed_at) === 'overdue';
+              const progressSoon = !row.completed_at && dueDateStatus(row.expected_completed_at) === 'soon';
+              return (
+                <div key={row.id} className={`grid gap-3 border-l-4 p-4 md:grid-cols-[1fr_auto] ${progressOverdue ? 'border-red-400 bg-red-50' : progressSoon ? 'border-amber-400 bg-amber-50' : 'border-leaf bg-slate-50'}`}>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium">{row.stage}{row.title ? ` / ${row.title}` : ''}</p>
+                      {progressOverdue && <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">進度逾期</span>}
+                      {progressSoon && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">即將到期</span>}
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{row.content}</p>
+                    <p className="mt-2 text-xs text-slate-500">日期：{row.started_at || '-'}　預計完成：{row.expected_completed_at || '-'}　完成日：{row.completed_at || '-'}</p>
+                  </div>
+                  <ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => removeProgress(row)} />
                 </div>
-                <ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => removeProgress(row)} />
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
@@ -688,9 +702,15 @@ function CostsPage() {
                 const totalTWD = costTotal(row);
                 const paidTWD = Number(row.paid_amount ?? 0) * Number(row.exchange_rate_to_twd || 1);
                 const owingTWD = totalTWD - paidTWD;
+                const dueStatus = dueDateStatus(row.due_date);
+                const dueCls = dueStatus === 'overdue' ? 'text-red-600 font-semibold' : dueStatus === 'soon' ? 'text-amber-600 font-semibold' : 'text-slate-700';
                 return (
-                  <tr key={row.id} className="border-t align-top">
-                    <td className="p-3 text-sm">{row.due_date || row.paid_at || '-'}</td>
+                  <tr key={row.id} className={`border-t align-top ${dueStatus === 'overdue' ? 'bg-red-50' : dueStatus === 'soon' ? 'bg-amber-50' : ''}`}>
+                    <td className={`p-3 text-sm ${dueCls}`}>
+                      {row.due_date || '-'}
+                      {dueStatus === 'overdue' && <span className="ml-1.5 rounded-full bg-red-100 px-1.5 py-0.5 text-xs text-red-700">逾期</span>}
+                      {dueStatus === 'soon' && <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700">即將到期</span>}
+                    </td>
                     <td className="p-3 text-sm">{products.rows.find((p) => p.id === row.product_id)?.name || '-'}</td>
                     <td className="p-3 text-sm">{row.custom_type || row.type}</td>
                     <td className="p-3 text-sm">{row.description || '-'}</td>
@@ -868,6 +888,9 @@ function ChannelAnalysisPage() {
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
   const [loading, setLoading] = useState(false);
+  const [productKeyword, setProductKeyword] = useState('');
+  const [productStoreRows, setProductStoreRows] = useState<Row[] | null>(null);
+  const [productSearching, setProductSearching] = useState(false);
 
   const monthShortcuts = useMemo(() => {
     const merged = [...recentMonths, ...availableMonths];
@@ -922,6 +945,25 @@ function ChannelAnalysisPage() {
     return rank(group(rows, (r) => `[${r.channel_category}] ${r.store_name}`)).slice(0, 10);
   }, [monthRows, selectedSku]);
 
+  async function searchProductStores() {
+    if (!supabase || productKeyword.trim().length < 2) return;
+    setProductSearching(true);
+    setProductStoreRows(null);
+    const kw = productKeyword.trim();
+    const { data } = await supabase
+      .from('product_store_sales')
+      .select('channel_category,store_name,quantity,revenue')
+      .ilike('external_product_name', `%${kw}%`)
+      .limit(10000);
+    setProductStoreRows(data ?? []);
+    setProductSearching(false);
+  }
+
+  const productStoreRanking = useMemo(() => {
+    if (!productStoreRows) return [];
+    return rank(group(productStoreRows, (r) => `[${r.channel_category}] ${r.store_name}`));
+  }, [productStoreRows]);
+
   return (
     <Page title="通路分析" subtitle="各通路商品銷售前三名、各商品最佳門市排行">
       <TopLinks links={[['/sales', '返回業績追蹤']]} />
@@ -941,6 +983,50 @@ function ChannelAnalysisPage() {
       </section>
 
       {loading && <p className="text-sm text-slate-400">載入中...</p>}
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-1 font-semibold">商品跨規格門市查詢</h3>
+        <p className="mb-4 text-xs text-slate-400">輸入商品名稱關鍵字，自動彙總所有符合的 SKU（不分尺寸／顏色），顯示各門市歷史累計銷售排行</p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={productKeyword}
+            onChange={(e) => setProductKeyword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && searchProductStores()}
+            placeholder="例：防曬帽、涼感上衣..."
+            className="flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-leaf"
+          />
+          <button
+            type="button"
+            onClick={searchProductStores}
+            disabled={productKeyword.trim().length < 2 || productSearching}
+            className="rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-40"
+          >
+            {productSearching ? '查詢中...' : '查詢'}
+          </button>
+        </div>
+
+        {productStoreRows !== null && (
+          <div className="mt-4">
+            {productStoreRanking.length === 0
+              ? <p className="text-sm text-slate-400">找不到符合「{productKeyword}」的銷售記錄</p>
+              : <>
+                  <p className="mb-3 text-xs text-slate-400">共找到 {productStoreRanking.length} 間門市的銷售資料（歷史累計）</p>
+                  <div className="space-y-2">
+                    {productStoreRanking.map((s) => (
+                      <div key={s.label} className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 rounded-md border border-slate-100 p-3 text-sm">
+                        <span className={`text-xl font-bold ${s.rank <= 3 ? 'text-coral' : 'text-slate-300'}`}>{s.rank}</span>
+                        <p className="break-words">{s.label}</p>
+                        <p className="text-slate-500">{s.quantity.toLocaleString('zh-TW')} 件</p>
+                        <p className="font-semibold text-leaf">{formatCurrency(s.revenue)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+            }
+          </div>
+        )}
+      </section>
 
       <section>
         <h3 className="mb-3 font-semibold">各通路商品前三名</h3>
@@ -1769,6 +1855,15 @@ function dedupeByName(rows: Row[]) {
 
 function costTotal(row: Row) {
   return Number(row.amount ?? 0) * Number(row.exchange_rate_to_twd || 1) + Number(row.bank_fee_twd ?? 0);
+}
+
+function dueDateStatus(dateStr: string | null | undefined): 'overdue' | 'soon' | 'ok' | 'none' {
+  if (!dateStr) return 'none';
+  const today = new Date().toISOString().slice(0, 10);
+  if (dateStr < today) return 'overdue';
+  const sevenDaysLater = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  if (dateStr <= sevenDaysLater) return 'soon';
+  return 'ok';
 }
 
 function costTypeLabel(type: string) {
