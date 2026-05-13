@@ -30,8 +30,7 @@ const nav = [
   ['/sales', '業績追蹤', BarChart3, false],
   ['/channel-analysis', '通路分析', TrendingUp, false],
   ['/inventory', '庫存追蹤', Package, false],
-  ['/sales-import', '業績匯入', Upload, true],
-  ['/inventory-import', '庫存匯入', Boxes, true],
+  ['/import', '資料匯入', Upload, true],
 ] as const;
 
 // Routes marked adminOnly=true are hidden from viewer role
@@ -115,8 +114,9 @@ export default function App() {
           <Route path="/sales" element={<ErrorBoundary><SalesPage /></ErrorBoundary>} />
           <Route path="/channel-analysis" element={<ErrorBoundary><ChannelAnalysisPage /></ErrorBoundary>} />
           <Route path="/inventory" element={<ErrorBoundary><InventoryPage /></ErrorBoundary>} />
-          <Route path="/sales-import" element={<Guard><ErrorBoundary><SalesImportPage /></ErrorBoundary></Guard>} />
-          <Route path="/inventory-import" element={<Guard><ErrorBoundary><InventoryImportPage /></ErrorBoundary></Guard>} />
+          <Route path="/import" element={<Guard><ErrorBoundary><ImportPage /></ErrorBoundary></Guard>} />
+          <Route path="/sales-import" element={<Navigate to="/import" replace />} />
+          <Route path="/inventory-import" element={<Navigate to="/import" replace />} />
         </Routes>
       </main>
     </div>
@@ -1793,117 +1793,29 @@ function parseInventoryExcel(data: unknown[][]): Row[] {
   return records;
 }
 
-function InventoryImportPage() {
-  const [message, setMessage] = useState('');
-  const [previewRows, setPreviewRows] = useState<Row[]>([]);
-  const [fileName, setFileName] = useState('');
-  const [recordDate, setRecordDate] = useState(new Date().toISOString().slice(0, 10));
-  const [importing, setImporting] = useState(false);
+function ImportPage() {
+  // ── 業績 state ──
+  const [salesMsg, setSalesMsg] = useState('');
+  const [salesRows, setSalesRows] = useState<Row[]>([]);
+  const [channelRows, setChannelRows] = useState<Row[]>([]);
+  const [storeRows, setStoreRows] = useState<Row[]>([]);
+  const [productStoreRows, setProductStoreRows] = useState<Row[]>([]);
+  const [salesFile, setSalesFile] = useState('');
+  const [importMonth, setImportMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [salesImporting, setSalesImporting] = useState(false);
+  const totalRevenue = salesRows.reduce((s, r) => s + Number(r.revenue ?? 0), 0);
+  const totalQty = salesRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
 
-  async function preview(e: FormEvent<HTMLFormElement>) {
+  // ── 庫存 state ──
+  const [invMsg, setInvMsg] = useState('');
+  const [invRows, setInvRows] = useState<Row[]>([]);
+  const [invFile, setInvFile] = useState('');
+  const [recordDate, setRecordDate] = useState(new Date().toISOString().slice(0, 10));
+  const [invImporting, setInvImporting] = useState(false);
+
+  async function previewSales(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const file = form.get('file');
-    const date = String(form.get('date'));
-    if (!(file instanceof File)) return;
-    setRecordDate(date);
-    setMessage('解析中...');
-    const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const data: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    const rows = parseInventoryExcel(data);
-    setPreviewRows(rows);
-    setFileName(file.name);
-    setMessage(rows.length ? `已解析 ${rows.length} 筆位置紀錄（${new Set(rows.map((r) => r.external_sku)).size} 個 SKU），請確認後匯入。` : '未解析到資料，請確認格式是否正確。');
-  }
-
-  async function doImport() {
-    if (!supabase || previewRows.length === 0) return;
-    setImporting(true);
-    const { error: delErr } = await supabase.from('inventory_records').delete().eq('recorded_at', recordDate);
-    if (delErr) { setMessage(`刪除失敗：${delErr.message}`); setImporting(false); return; }
-    const rowsWithDate = previewRows.map((r) => ({ ...r, recorded_at: recordDate }));
-    // 分批 500 筆插入
-    for (let i = 0; i < rowsWithDate.length; i += 500) {
-      const { error } = await supabase.from('inventory_records').insert(rowsWithDate.slice(i, i + 500));
-      if (error) { setMessage(`匯入失敗：${error.message}`); setImporting(false); return; }
-    }
-    setMessage(`✓ 已覆蓋 ${recordDate} 舊庫存，匯入 ${previewRows.length} 筆紀錄（${new Set(previewRows.map((r) => r.external_sku)).size} 個 SKU）。`);
-    setPreviewRows([]);
-    setImporting(false);
-  }
-
-  return (
-    <Page title="庫存匯入" subtitle="上傳新事業銷售庫存統計 Excel，同日期舊資料自動覆蓋">
-      <TopLinks links={[['/inventory', '返回庫存追蹤']]} />
-      <form onSubmit={preview} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-        <div className="grid gap-3 md:grid-cols-3">
-          <label className="text-sm">盤點日期
-            <input name="date" type="date" value={recordDate} onChange={(e) => setRecordDate(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2" required />
-          </label>
-          <label className="text-sm md:col-span-2">Excel 檔案（新事業銷售庫存統計格式）
-            <input name="file" type="file" accept=".xlsx,.xls" className="mt-1 w-full rounded-md border px-3 py-2" required />
-          </label>
-        </div>
-        <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-white">預覽匯入資料</button>
-        {message && <p className="mt-3 text-sm text-slate-600">{message}</p>}
-      </form>
-
-      {previewRows.length > 0 && (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <div className="md:flex md:items-start md:justify-between">
-            <div>
-              <h3 className="font-semibold">匯入預覽</h3>
-              <p className="mt-1 text-sm text-slate-500">{fileName}｜盤點日期 {recordDate}｜{new Set(previewRows.map((r) => r.external_sku)).size} 個 SKU｜{previewRows.length.toLocaleString('zh-TW')} 筆位置紀錄</p>
-              <p className="mt-1 text-xs text-amber-600">⚠ 確認匯入後，{recordDate} 的舊庫存資料將全部覆蓋</p>
-            </div>
-            <div className="mt-3 flex gap-2 md:mt-0">
-              <button type="button" onClick={() => setPreviewRows([])} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
-              <button type="button" onClick={doImport} disabled={importing} className="rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-50">
-                {importing ? '匯入中...' : '確認匯入'}
-              </button>
-            </div>
-          </div>
-          <div className="mt-4 max-h-64 overflow-y-auto rounded-md border border-slate-100">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-slate-50">
-                <tr><th className="p-2 text-left">SKU</th><th className="p-2 text-left">品名</th><th className="p-2 text-left">位置</th><th className="p-2 text-right">數量</th></tr>
-              </thead>
-              <tbody>
-                {previewRows.slice(0, 100).map((r, i) => (
-                  <tr key={i} className="border-t border-slate-100">
-                    <td className="p-2 font-mono text-slate-400">{r.external_sku}</td>
-                    <td className="p-2 text-slate-600">{r.product_name}</td>
-                    <td className="p-2 text-slate-600">{r.location}</td>
-                    <td className="p-2 text-right">{Number(r.quantity).toLocaleString('zh-TW')}</td>
-                  </tr>
-                ))}
-                {previewRows.length > 100 && <tr><td colSpan={4} className="p-2 text-center text-slate-400">...僅顯示前 100 筆</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-    </Page>
-  );
-}
-
-function SalesImportPage() {
-  const [message, setMessage] = useState('');
-  const [previewRows, setPreviewRows] = useState<Row[]>([]);
-  const [channelPreviewRows, setChannelPreviewRows] = useState<Row[]>([]);
-  const [storePreviewRows, setStorePreviewRows] = useState<Row[]>([]);
-  const [productStorePreviewRows, setProductStorePreviewRows] = useState<Row[]>([]);
-  const [fileName, setFileName] = useState('');
-  const [importMonth, setImportMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [importing, setImporting] = useState(false);
-  const totalRevenue = previewRows.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
-  const totalQuantity = previewRows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
-
-  async function preview(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
     const file = form.get('file');
     const month = String(form.get('month'));
     if (!(file instanceof File)) return;
@@ -1911,95 +1823,146 @@ function SalesImportPage() {
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
     const parsed = parseSalesImport(workbook, XLSX.utils, month);
-    setPreviewRows(parsed.salesRows);
-    setChannelPreviewRows(parsed.channelRows);
-    setStorePreviewRows(parsed.storeRows);
-    setProductStorePreviewRows(parsed.productStoreRows);
-    setFileName(file.name);
-    setMessage(parsed.salesRows.length ? `已解析 ${parsed.salesRows.length} 筆商品業績、${parsed.storeRows.length} 筆門市業績，請確認預覽後再匯入。` : '沒有解析到可匯入資料，請確認欄位名稱。');
+    setSalesRows(parsed.salesRows); setChannelRows(parsed.channelRows);
+    setStoreRows(parsed.storeRows); setProductStoreRows(parsed.productStoreRows);
+    setSalesFile(file.name);
+    setSalesMsg(parsed.salesRows.length ? `已解析 ${parsed.salesRows.length} 筆商品業績、${parsed.storeRows.length} 筆門市業績，請確認後匯入。` : '沒有解析到資料，請確認格式。');
   }
 
-  async function importPreview() {
-    if (!supabase || previewRows.length === 0) return;
-    setImporting(true);
+  async function doSalesImport() {
+    if (!supabase || salesRows.length === 0) return;
+    setSalesImporting(true);
     const monthStart = `${importMonth}-01`;
-    const monthEndDate = monthEnd(importMonth);
     const salesMonth = `${importMonth}-01`;
-
-    // 先刪除同月份舊資料，避免重複計算
-    const { error: delErr1 } = await supabase.from('sales_records').delete().gte('sold_at', monthStart).lte('sold_at', monthEndDate);
-    if (delErr1) { setMessage(`刪除舊業績資料失敗：${delErr1.message}`); setImporting(false); return; }
+    const { error: delErr } = await supabase.from('sales_records').delete().gte('sold_at', monthStart).lte('sold_at', monthEnd(importMonth));
+    if (delErr) { setSalesMsg(`刪除失敗：${delErr.message}`); setSalesImporting(false); return; }
     await supabase.from('channel_sales_records').delete().eq('sales_month', salesMonth);
     await supabase.from('channel_store_sales_records').delete().eq('sales_month', salesMonth);
     await supabase.from('product_store_sales').delete().eq('sales_month', salesMonth);
+    const { error } = await supabase.from('sales_records').insert(salesRows);
+    if (!error && channelRows.length) await supabase.from('channel_sales_records').insert(channelRows);
+    if (!error && storeRows.length) await supabase.from('channel_store_sales_records').insert(storeRows);
+    if (!error && productStoreRows.length) await supabase.from('product_store_sales').insert(productStoreRows);
+    setSalesMsg(error ? `匯入失敗：${error.message}` : `✓ 已覆蓋 ${importMonth} 舊資料，匯入 ${salesRows.length} 筆業績。`);
+    if (!error) { setSalesRows([]); setChannelRows([]); setStoreRows([]); setProductStoreRows([]); }
+    setSalesImporting(false);
+  }
 
-    // 寫入新資料
-    const { error } = await supabase.from('sales_records').insert(previewRows);
-    if (!error && channelPreviewRows.length) await supabase.from('channel_sales_records').insert(channelPreviewRows);
-    if (!error && storePreviewRows.length) await supabase.from('channel_store_sales_records').insert(storePreviewRows);
-    if (!error && productStorePreviewRows.length) await supabase.from('product_store_sales').insert(productStorePreviewRows);
-    setMessage(error ? `匯入失敗：${error.message}` : `✓ 已覆蓋 ${importMonth} 舊資料，匯入 ${previewRows.length} 筆新業績。`);
-    if (!error) {
-      setPreviewRows([]);
-      setChannelPreviewRows([]);
-      setStorePreviewRows([]);
-      setProductStorePreviewRows([]);
+  async function previewInv(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const file = form.get('file');
+    const date = String(form.get('date'));
+    if (!(file instanceof File)) return;
+    setRecordDate(date);
+    setInvMsg('解析中...');
+    const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    const rows = parseInventoryExcel(data);
+    setInvRows(rows); setInvFile(file.name);
+    setInvMsg(rows.length ? `已解析 ${rows.length} 筆（${new Set(rows.map((r) => r.external_sku)).size} 個 SKU），請確認後匯入。` : '未解析到資料，請確認格式。');
+  }
+
+  async function doInvImport() {
+    if (!supabase || invRows.length === 0) return;
+    setInvImporting(true);
+    const { error: delErr } = await supabase.from('inventory_records').delete().eq('recorded_at', recordDate);
+    if (delErr) { setInvMsg(`刪除失敗：${delErr.message}`); setInvImporting(false); return; }
+    const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
+    for (let i = 0; i < rowsWithDate.length; i += 500) {
+      const { error } = await supabase.from('inventory_records').insert(rowsWithDate.slice(i, i + 500));
+      if (error) { setInvMsg(`匯入失敗：${error.message}`); setInvImporting(false); return; }
     }
-    setImporting(false);
+    setInvMsg(`✓ 已覆蓋 ${recordDate} 舊庫存，匯入 ${invRows.length} 筆（${new Set(invRows.map((r) => r.external_sku)).size} 個 SKU）。`);
+    setInvRows([]);
+    setInvImporting(false);
   }
 
   return (
-    <Page title="業績匯入" subtitle="每週重新上傳同月份資料時，舊資料會自動覆蓋，不會重複計算。">
-      <TopLinks links={[['/sales', '返回業績追蹤']]} />
-      <form onSubmit={preview} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-        <div className="grid gap-3 md:grid-cols-3">
-          <label className="text-sm">匯入月份<input name="month" type="month" defaultValue={importMonth} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
-          <label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
-        </div>
-        <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-white">預覽匯入資料</button>
-        {message && <p className="mt-3 text-sm text-slate-600">{message}</p>}
-      </form>
-      {previewRows.length > 0 && (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-start">
-            <div>
-              <h3 className="font-semibold">匯入預覽</h3>
-              <p className="mt-1 text-sm text-slate-500">{fileName} / {previewRows.length.toLocaleString('zh-TW')} 筆 / 數量 {totalQuantity.toLocaleString('zh-TW')} / 金額 {formatCurrency(totalRevenue)}</p>
-              <p className="mt-1 text-xs text-amber-600">⚠ 確認匯入後，{importMonth} 的舊業績資料將全部覆蓋</p>
+    <Page title="資料匯入" subtitle="業績與庫存資料匯入，同期舊資料自動覆蓋">
+      {/* ── 業績匯入 ── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-4 font-semibold">業績匯入</h3>
+        <form onSubmit={previewSales}>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-sm">匯入月份<input name="month" type="month" defaultValue={importMonth} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
+            <label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
+          </div>
+          <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-sm text-white">預覽業績資料</button>
+          {salesMsg && <p className="mt-3 text-sm text-slate-600">{salesMsg}</p>}
+        </form>
+        {salesRows.length > 0 && (
+          <div className="mt-4 rounded-lg border border-slate-100 p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-sm text-slate-500">{salesFile}｜{salesRows.length.toLocaleString('zh-TW')} 筆｜{totalQty.toLocaleString('zh-TW')} 件｜{formatCurrency(totalRevenue)}</p>
+                <p className="mt-1 text-xs text-amber-600">⚠ 確認後 {importMonth} 舊業績將全部覆蓋</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setSalesRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
+                <button type="button" onClick={doSalesImport} disabled={salesImporting} className="rounded-md bg-leaf px-3 py-1.5 text-sm text-white disabled:opacity-50">{salesImporting ? '匯入中...' : '確認匯入'}</button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => { setPreviewRows([]); setChannelPreviewRows([]); setStorePreviewRows([]); setProductStorePreviewRows([]); }} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
-              <button type="button" onClick={importPreview} disabled={importing} className="rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-50">{importing ? '匯入中...' : '確認匯入'}</button>
+            <Table columns={['日期', 'SKU', '商品', '通路', '數量', '金額']}>
+              {salesRows.slice(0, 20).map((row, i) => (
+                <tr key={i} className="border-t">
+                  <td className="p-3">{formatFullDate(row.sold_at)}</td>
+                  <td className="p-3">{row.external_sku}</td>
+                  <td className="p-3">{row.external_product_name}</td>
+                  <td className="p-3">{row.channel}</td>
+                  <td className="p-3">{Number(row.quantity ?? 0).toLocaleString('zh-TW')}</td>
+                  <td className="p-3">{formatCurrency(row.revenue)}</td>
+                </tr>
+              ))}
+            </Table>
+            {salesRows.length > 20 && <p className="mt-2 text-xs text-slate-400">只顯示前 20 筆</p>}
+          </div>
+        )}
+      </section>
+
+      {/* ── 庫存匯入 ── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-4 font-semibold">庫存匯入</h3>
+        <form onSubmit={previewInv}>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-sm">盤點日期<input name="date" type="date" value={recordDate} onChange={(e) => setRecordDate(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
+            <label className="text-sm md:col-span-2">Excel 檔案（新事業銷售庫存統計格式）<input name="file" type="file" accept=".xlsx,.xls" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
+          </div>
+          <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-sm text-white">預覽庫存資料</button>
+          {invMsg && <p className="mt-3 text-sm text-slate-600">{invMsg}</p>}
+        </form>
+        {invRows.length > 0 && (
+          <div className="mt-4 rounded-lg border border-slate-100 p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-sm text-slate-500">{invFile}｜盤點日期 {recordDate}｜{new Set(invRows.map((r) => r.external_sku)).size} 個 SKU｜{invRows.length.toLocaleString('zh-TW')} 筆</p>
+                <p className="mt-1 text-xs text-amber-600">⚠ 確認後 {recordDate} 舊庫存將全部覆蓋</p>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setInvRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
+                <button type="button" onClick={doInvImport} disabled={invImporting} className="rounded-md bg-leaf px-3 py-1.5 text-sm text-white disabled:opacity-50">{invImporting ? '匯入中...' : '確認匯入'}</button>
+              </div>
+            </div>
+            <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-100">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">SKU</th><th className="p-2 text-left">位置</th><th className="p-2 text-right">數量</th></tr></thead>
+                <tbody>
+                  {invRows.slice(0, 100).map((r, i) => (
+                    <tr key={i} className="border-t border-slate-100">
+                      <td className="p-2 font-mono text-slate-400">{r.external_sku}</td>
+                      <td className="p-2 text-slate-600">{r.location}</td>
+                      <td className="p-2 text-right">{Number(r.quantity).toLocaleString('zh-TW')}</td>
+                    </tr>
+                  ))}
+                  {invRows.length > 100 && <tr><td colSpan={3} className="p-2 text-center text-slate-400">...僅顯示前 100 筆</td></tr>}
+                </tbody>
+              </table>
             </div>
           </div>
-          <Table columns={['日期', 'SKU', '商品', '通路', '數量', '業績金額']}>
-            {previewRows.slice(0, 20).map((row, index) => (
-              <tr key={`${row.external_sku}-${index}`} className="border-t">
-                <td className="p-3">{formatFullDate(row.sold_at)}</td>
-                <td className="p-3">{row.external_sku}</td>
-                <td className="p-3">{row.external_product_name}</td>
-                <td className="p-3">{row.channel}</td>
-                <td className="p-3">{Number(row.quantity ?? 0).toLocaleString('zh-TW')}</td>
-                <td className="p-3">{formatCurrency(row.revenue)}</td>
-              </tr>
-            ))}
-          </Table>
-          {previewRows.length > 20 && <p className="mt-3 text-sm text-slate-500">只顯示前 20 筆預覽。</p>}
-          {channelPreviewRows.length > 0 && (
-            <div className="mt-6 grid gap-4 md:grid-cols-3">
-              {channelPreviewRows.map((row) => <Card key={row.channel_category} label={row.channel_category} value={formatCurrency(row.revenue)} helper={`${Number(row.quantity ?? 0).toLocaleString('zh-TW')} 件`} compact />)}
-            </div>
-          )}
-          {storePreviewRows.length > 0 && (
-            <div className="mt-6">
-              <h4 className="mb-3 font-semibold">門市/平台分類預覽</h4>
-              <Table columns={['分類', '門市/平台', '數量', '業績金額']}>
-                {storePreviewRows.slice(0, 20).map((row) => <tr key={`${row.channel_category}-${row.store_name}`} className="border-t"><td className="p-3">{row.channel_category}</td><td className="p-3">{row.store_name}</td><td className="p-3">{row.quantity}</td><td className="p-3">{formatCurrency(row.revenue)}</td></tr>)}
-              </Table>
-            </div>
-          )}
-        </section>
-      )}
+        )}
+      </section>
     </Page>
   );
 }
