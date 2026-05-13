@@ -205,12 +205,83 @@ function Dashboard() {
   const products = useRows('products');
   const costs = useRows('development_costs');
   const sales = useRows('sales_records');
+  const inventory = useRows('inventory_records', 'recorded_at');
   const month = new Date().toISOString().slice(0, 7);
   const active = products.rows.filter((p) => ['planning', 'quoting', 'in_development', 'mass_production'].includes(p.status)).length;
   const delayed = products.rows.filter((p) => p.status === 'delayed').length;
   const monthCost = costs.rows.filter((c) => String(c.paid_at ?? c.created_at).startsWith(month)).reduce((s, c) => s + costTotal(c), 0);
   const monthSales = sales.rows.filter((s) => String(s.sold_at).startsWith(month)).reduce((s, r) => s + Number(r.revenue ?? 0), 0);
   const statusRows = groupProductsByStatus(products.rows);
+
+  const latestSnapshotDate = useMemo(() => {
+    let d = '';
+    for (const r of inventory.rows) { const date = String(r.recorded_at || '').slice(0, 10); if (date > d) d = date; }
+    return d;
+  }, [inventory.rows]);
+
+  const latestBySku = useMemo(() => {
+    const latestDate = new Map<string, string>();
+    for (const r of inventory.rows) {
+      const sku = String(r.external_sku || '');
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (sku && (!latestDate.has(sku) || date > latestDate.get(sku)!)) latestDate.set(sku, date);
+    }
+    const totals = new Map<string, { external_sku: string; product_name: string; quantity: number }>();
+    for (const r of inventory.rows) {
+      const sku = String(r.external_sku || '');
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (!sku || date !== latestDate.get(sku)) continue;
+      const entry = totals.get(sku) ?? { external_sku: sku, product_name: String(r.product_name || sku), quantity: 0 };
+      entry.quantity += Number(r.quantity ?? 0);
+      totals.set(sku, entry);
+    }
+    return [...totals.values()];
+  }, [inventory.rows]);
+
+  const currentBySku = useMemo(() => {
+    const soldMap = new Map<string, number>();
+    if (latestSnapshotDate) {
+      for (const r of sales.rows) {
+        if (String(r.sold_at || '').slice(0, 10) <= latestSnapshotDate) continue;
+        const sku = String(r.external_sku || '');
+        if (sku) soldMap.set(sku, (soldMap.get(sku) ?? 0) + Number(r.quantity ?? 0));
+      }
+    }
+    return latestBySku.map((inv) => ({ ...inv, quantity: Math.max(0, inv.quantity - (soldMap.get(inv.external_sku) ?? 0)) }));
+  }, [latestBySku, latestSnapshotDate, sales.rows]);
+
+  const dashboardAlerts = useMemo(() => {
+    const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
+    const recent2 = allMonths.slice(-2);
+    const prior3 = allMonths.slice(-5, -2);
+    const last3 = allMonths.slice(-3);
+    const bySkuMonth = new Map<string, Map<string, number>>();
+    for (const r of sales.rows) {
+      const sku = String(r.external_sku || '');
+      const mo = String(r.sold_at || '').slice(0, 7);
+      if (!sku || !mo) continue;
+      const m = bySkuMonth.get(sku) ?? new Map<string, number>();
+      m.set(mo, (m.get(mo) ?? 0) + Number(r.quantity ?? 0));
+      bySkuMonth.set(sku, m);
+    }
+    const stockMap = new Map(currentBySku.map((inv) => [inv.external_sku, inv.quantity]));
+    const nameMap = new Map(currentBySku.map((inv) => [inv.external_sku, inv.product_name]));
+    const alerts: Array<{ sku: string; name: string; stock: number; daysRemaining: number; spike: boolean; recentAvg: number; prevAvg: number }> = [];
+    for (const [sku, monthMap] of bySkuMonth) {
+      const recentAvg = recent2.length ? recent2.reduce((s, m) => s + (monthMap.get(m) ?? 0), 0) / recent2.length : 0;
+      const prevAvg = prior3.length ? prior3.reduce((s, m) => s + (monthMap.get(m) ?? 0), 0) / prior3.length : 0;
+      const last3Total = last3.reduce((s, m) => s + (monthMap.get(m) ?? 0), 0);
+      const avgDaily = last3.length ? last3Total / last3.length / 30 : 0;
+      const stock = stockMap.get(sku) ?? 0;
+      const daysRemaining = avgDaily > 0 ? Math.round(stock / avgDaily) : Infinity;
+      const spike = prevAvg > 0 && recentAvg > prevAvg * 1.5;
+      if (daysRemaining < 60 || spike) {
+        alerts.push({ sku, name: nameMap.get(sku) || sku, stock, daysRemaining, spike, recentAvg, prevAvg });
+      }
+    }
+    return alerts.sort((a, b) => (a.daysRemaining === Infinity ? 9999 : a.daysRemaining) - (b.daysRemaining === Infinity ? 9999 : b.daysRemaining)).slice(0, 5);
+  }, [sales.rows, currentBySku]);
+
   return (
     <Page title="Dashboard" subtitle="開發商品、費用與業績總覽">
       <div className="grid gap-4 md:grid-cols-4">
@@ -220,6 +291,36 @@ function Dashboard() {
         <Card label="本月業績" value={formatCurrency(monthSales)} />
       </div>
       <StatusSummary rows={statusRows} />
+      {dashboardAlerts.length > 0 && (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 p-5">
+          <h3 className="mb-3 font-semibold text-amber-800">補貨警示 Top 5</h3>
+          <div className="space-y-2">
+            {dashboardAlerts.map(({ sku, name, stock, daysRemaining, spike, recentAvg, prevAvg }) => {
+              const urgent = daysRemaining < 30;
+              const caution = daysRemaining >= 30 && daysRemaining < 60;
+              return (
+                <div key={sku} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-4 py-2.5 shadow-sm">
+                  <div>
+                    <span className="font-mono text-xs text-slate-400">{sku}</span>
+                    <span className="ml-2 text-sm text-slate-700">{name}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    {spike && (
+                      <span className="rounded-full bg-leaf/10 px-2.5 py-0.5 font-medium text-leaf">
+                        📈 銷量突增（近期 {recentAvg.toFixed(0)} 件/月 vs 前期 {prevAvg.toFixed(0)} 件/月）
+                      </span>
+                    )}
+                    <span className={`rounded-full px-2.5 py-0.5 font-semibold ${urgent ? 'bg-red-100 text-red-600' : caution ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                      {daysRemaining === Infinity ? '無銷售紀錄' : `剩約 ${daysRemaining} 天庫存`}
+                    </span>
+                    <span className="text-slate-400">現貨 {stock.toLocaleString('zh-TW')} 件</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </Page>
   );
 }
