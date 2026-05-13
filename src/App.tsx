@@ -1035,6 +1035,15 @@ function InventoryPage() {
     return map;
   }, [inventory.rows]);
 
+  const latestSnapshotDate = useMemo(() => {
+    let d = '';
+    for (const r of inventory.rows) {
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (date > d) d = date;
+    }
+    return d;
+  }, [inventory.rows]);
+
   // Sales after the snapshot date — subtracted to keep stock current
   const postSnapshotSoldMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -1104,15 +1113,6 @@ function InventoryPage() {
   const totalStock = useMemo(() => currentBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [currentBySku]);
   const totalSold = useMemo(() => chartData.reduce((s, d) => s + d.sold, 0), [chartData]);
   const avgRate = useMemo(() => chartData.length ? chartData.reduce((s, d) => s + d.rate, 0) / chartData.length : 0, [chartData]);
-
-  const latestSnapshotDate = useMemo(() => {
-    let d = '';
-    for (const r of inventory.rows) {
-      const date = String(r.recorded_at || '').slice(0, 10);
-      if (date > d) d = date;
-    }
-    return d;
-  }, [inventory.rows]);
 
   const channelDist = useMemo(() => {
     const map = new Map<string, { channel: string; quantity: number; locations: Map<string, number> }>();
