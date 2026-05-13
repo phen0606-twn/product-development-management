@@ -1640,6 +1640,22 @@ function InventoryPage() {
         />
       )}
 
+      {trimSearch.length >= 2 && filteredMerged.length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
+          <p className="text-xs text-slate-400 mb-1">「{trimSearch}」查詢結果 — 共 {filteredMerged.length} 個 SKU</p>
+          <div className="flex gap-6">
+            <div>
+              <p className="text-xs text-slate-500">目前庫存合計</p>
+              <p className="text-2xl font-bold text-ink">{filteredMerged.reduce((s, d) => s + d.stock, 0).toLocaleString('zh-TW')} <span className="text-sm font-normal text-slate-400">件</span></p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">本月銷量合計</p>
+              <p className="text-2xl font-bold text-leaf">{filteredMerged.reduce((s, d) => s + d.sold, 0).toLocaleString('zh-TW')} <span className="text-sm font-normal text-slate-400">件</span></p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {filteredMerged.length === 0 ? (
         <div className="rounded-lg border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
           {trimSearch.length >= 2 ? `找不到符合「${trimSearch}」的商品` : '尚無庫存資料，請新增庫存紀錄'}
