@@ -800,19 +800,29 @@ function SalesPage() {
 const CHANNELS = ['網路官網／平台', '街邊店', '捷運門市'] as const;
 
 function ChannelAnalysisPage() {
-  const pss = useRows('product_store_sales', 'sales_month');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [selectedSku, setSelectedSku] = useState('');
+  const [monthRows, setMonthRows] = useState<Row[]>([]);
+  const [availableMonths, setAvailableMonths] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const availableMonths = useMemo(
-    () => [...new Set(pss.rows.map((r) => String(r.sales_month).slice(0, 7)).filter(Boolean))].sort().reverse(),
-    [pss.rows],
-  );
+  // Fetch distinct months on mount
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.from('product_store_sales').select('sales_month').order('sales_month', { ascending: false }).limit(5000)
+      .then(({ data }) => {
+        if (data) setAvailableMonths([...new Set(data.map((r) => String(r.sales_month).slice(0, 7)))].sort().reverse());
+      });
+  }, []);
 
-  const monthRows = useMemo(
-    () => pss.rows.filter((r) => String(r.sales_month).slice(0, 7) === selectedMonth),
-    [pss.rows, selectedMonth],
-  );
+  // Fetch data for the selected month directly — avoids the global 3000-row cap
+  useEffect(() => {
+    if (!supabase) return;
+    setLoading(true);
+    setSelectedSku('');
+    supabase.from('product_store_sales').select('*').eq('sales_month', `${selectedMonth}-01`).limit(5000)
+      .then(({ data }) => { setMonthRows(data ?? []); setLoading(false); });
+  }, [selectedMonth]);
 
   const topByChannel = useMemo(
     () => CHANNELS.map((ch) => ({
@@ -854,6 +864,8 @@ function ChannelAnalysisPage() {
           {availableMonths.length === 0 && <p className="text-sm text-slate-400">尚無資料，請先匯入業績</p>}
         </div>
       </section>
+
+      {loading && <p className="text-sm text-slate-400">載入中...</p>}
 
       <section>
         <h3 className="mb-3 font-semibold">各通路商品前三名</h3>
