@@ -1,6 +1,6 @@
 import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
@@ -23,15 +23,18 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string }
 }
 
 const nav = [
-  ['/', 'Dashboard', LayoutDashboard],
-  ['/products', '商品管理', Boxes],
-  ['/vendors', '廠商管理', Users],
-  ['/costs', '費用管理', DollarSign],
-  ['/sales', '業績追蹤', BarChart3],
-  ['/channel-analysis', '通路分析', TrendingUp],
-  ['/inventory', '庫存追蹤', Package],
-  ['/sales-import', '業績匯入', Upload],
+  ['/', 'Dashboard', LayoutDashboard, false],
+  ['/products', '商品管理', Boxes, true],
+  ['/vendors', '廠商管理', Users, true],
+  ['/costs', '費用管理', DollarSign, true],
+  ['/sales', '業績追蹤', BarChart3, false],
+  ['/channel-analysis', '通路分析', TrendingUp, false],
+  ['/inventory', '庫存追蹤', Package, false],
+  ['/sales-import', '業績匯入', Upload, true],
 ] as const;
+
+// Routes marked adminOnly=true are hidden from viewer role
+const ADMIN_ROUTES = new Set(['/products', '/vendors', '/costs', '/sales-import']);
 
 const statusOptions = [
   ['planning', '提案'],
@@ -49,6 +52,7 @@ const costTypes = ['打樣費', '模具費', '運費', '關稅', '設計費', '�
 export default function App() {
   const [ready, setReady] = useState(!hasSupabaseConfig);
   const [email, setEmail] = useState<string | null>(null);
+  const [role, setRole] = useState<string>('admin');
   const [resetPassword, setResetPassword] = useState(false);
 
   useEffect(() => {
@@ -59,11 +63,13 @@ export default function App() {
     }
     supabase.auth.getSession().then(({ data }) => {
       setEmail(data.session?.user.email ?? null);
+      setRole(data.session?.user.user_metadata?.role ?? 'admin');
       setReady(true);
     });
     return supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') setResetPassword(true);
       setEmail(session?.user.email ?? null);
+      setRole(session?.user.user_metadata?.role ?? 'admin');
       setReady(true);
     }).data.subscription.unsubscribe;
   }, []);
@@ -72,32 +78,43 @@ export default function App() {
   if (hasSupabaseConfig && !email) return <Login />;
   if (hasSupabaseConfig && resetPassword) return <PasswordReset onDone={() => setResetPassword(false)} />;
 
+  const isViewer = role === 'viewer';
+
+  function Guard({ children }: { children: ReactNode }) {
+    return isViewer ? <Navigate to="/" replace /> : <>{children}</>;
+  }
+
   return (
     <div className="min-h-screen bg-mist lg:grid lg:grid-cols-[238px_1fr]">
       <aside className="border-r border-slate-200 bg-white p-5">
         <h1 className="text-lg font-semibold text-ink">商品開發管理</h1>
         <p className="mt-1 text-xs text-slate-500">防曬 / 天氣商品開發系統</p>
         <nav className="mt-6 space-y-1">
-          {nav.map(([to, label, Icon]) => (
+          {nav.filter(([to, , , adminOnly]) => !(isViewer && adminOnly)).map(([to, label, Icon]) => (
             <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm ${isActive ? 'bg-leaf text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
               <Icon className="h-4 w-4" />
               {label}
             </NavLink>
           ))}
         </nav>
-        {email && <button onClick={() => supabase?.auth.signOut()} className="mt-8 text-left text-xs text-slate-500">登出<br />{email}</button>}
+        {email && (
+          <div className="mt-8">
+            {isViewer && <span className="mb-2 block rounded-md bg-slate-100 px-2 py-1 text-center text-xs text-slate-500">檢視者</span>}
+            <button onClick={() => supabase?.auth.signOut()} className="text-left text-xs text-slate-500">登出<br />{email}</button>
+          </div>
+        )}
       </aside>
       <main className="p-5 lg:p-8">
         <Routes>
           <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
-          <Route path="/products" element={<ErrorBoundary><ProductsPage /></ErrorBoundary>} />
-          <Route path="/products/:id" element={<ErrorBoundary><ProductDetailPage /></ErrorBoundary>} />
-          <Route path="/vendors" element={<ErrorBoundary><VendorsPage /></ErrorBoundary>} />
-          <Route path="/costs" element={<ErrorBoundary><CostsPage /></ErrorBoundary>} />
+          <Route path="/products" element={<Guard><ErrorBoundary><ProductsPage /></ErrorBoundary></Guard>} />
+          <Route path="/products/:id" element={<Guard><ErrorBoundary><ProductDetailPage /></ErrorBoundary></Guard>} />
+          <Route path="/vendors" element={<Guard><ErrorBoundary><VendorsPage /></ErrorBoundary></Guard>} />
+          <Route path="/costs" element={<Guard><ErrorBoundary><CostsPage /></ErrorBoundary></Guard>} />
           <Route path="/sales" element={<ErrorBoundary><SalesPage /></ErrorBoundary>} />
           <Route path="/channel-analysis" element={<ErrorBoundary><ChannelAnalysisPage /></ErrorBoundary>} />
           <Route path="/inventory" element={<ErrorBoundary><InventoryPage /></ErrorBoundary>} />
-          <Route path="/sales-import" element={<ErrorBoundary><SalesImportPage /></ErrorBoundary>} />
+          <Route path="/sales-import" element={<Guard><ErrorBoundary><SalesImportPage /></ErrorBoundary></Guard>} />
         </Routes>
       </main>
     </div>
