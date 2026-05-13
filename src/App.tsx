@@ -319,7 +319,7 @@ function Dashboard() {
                 <div key={sku} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-4 py-2.5 shadow-sm">
                   <div>
                     <span className="font-mono text-xs text-slate-400">{sku}</span>
-                    <span className="ml-2 text-sm text-slate-700">{name}</span>
+                    <span className="ml-2 text-sm text-slate-700">{name.startsWith(sku) ? name.slice(sku.length).trim() : name}</span>
                   </div>
                   <div className="flex items-center gap-2 text-xs">
                     {spike && (
