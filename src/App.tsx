@@ -945,6 +945,7 @@ function classifyInventoryLocation(loc: string): string {
 function InventoryPage() {
   const inventory = useRows('inventory_records', 'recorded_at');
   const sales = useRows('sales_records', 'sold_at');
+  const products = useRows('products', 'created_at');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -1011,6 +1012,28 @@ function InventoryPage() {
     }).filter((d) => d.stock > 0 || d.sold > 0);
     return rows.sort((a, b) => b.rate - a.rate);
   }, [latestBySku, soldMap]);
+
+  const skuToCategory = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of products.rows) {
+      const sku = String(p.sku || '').trim();
+      if (sku) map.set(sku, String(p.category || '未分類'));
+    }
+    return map;
+  }, [products.rows]);
+
+  const categoryDist = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const inv of latestBySku) {
+      const sku = String(inv.external_sku || '');
+      const cat = skuToCategory.get(sku) || '未分類';
+      map.set(cat, (map.get(cat) ?? 0) + Number(inv.quantity ?? 0));
+    }
+    const total = [...map.values()].reduce((s, v) => s + v, 0) || 1;
+    return [...map.entries()]
+      .map(([category, quantity]) => ({ category, quantity, pct: quantity / total * 100 }))
+      .sort((a, b) => b.quantity - a.quantity);
+  }, [latestBySku, skuToCategory]);
 
   const maxTotal = useMemo(() => Math.max(...chartData.map((d) => d.total), 1), [chartData]);
   const totalStock = useMemo(() => latestBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [latestBySku]);
@@ -1116,6 +1139,25 @@ function InventoryPage() {
         <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact />
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
       </div>
+
+      {categoryDist.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <h3 className="mb-4 font-semibold">分類庫存佔比</h3>
+          <div className="space-y-2.5">
+            {categoryDist.map((c) => (
+              <div key={c.category}>
+                <div className="mb-1 flex items-center justify-between text-xs">
+                  <span className="font-medium text-slate-700">{c.category}</span>
+                  <span className="text-slate-500">共 {c.quantity.toLocaleString('zh-TW')} 件／佔比 <span className="font-semibold text-leaf">{c.pct.toFixed(1)}%</span></span>
+                </div>
+                <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div style={{ width: `${c.pct}%` }} className="h-full bg-cream transition-all" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {channelDist.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
