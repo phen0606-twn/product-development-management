@@ -932,6 +932,16 @@ function ChannelAnalysisPage() {
   );
 }
 
+function classifyInventoryLocation(loc: string): string {
+  if (/^000002\s/.test(loc)) return '退貨倉';
+  if (/^000025\s/.test(loc)) return '報廢倉';
+  if (/^000/.test(loc)) return '總倉';
+  if (/^0ZZZZ/.test(loc)) return '在途';
+  if (/^E\d{3}/.test(loc)) return '網路／平台';
+  if (/捷運|M6/.test(loc)) return '捷運門市';
+  return '街邊店';
+}
+
 function InventoryPage() {
   const inventory = useRows('inventory_records', 'recorded_at');
   const sales = useRows('sales_records', 'sold_at');
@@ -940,6 +950,10 @@ function InventoryPage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [message, setMessage] = useState('');
   const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
+  const [search, setSearch] = useState('');
+  const [showAllChart, setShowAllChart] = useState(false);
+  const [showAllTable, setShowAllTable] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
 
   const availableMonths = useMemo(
     () => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(),
@@ -1003,6 +1017,52 @@ function InventoryPage() {
   const totalSold = useMemo(() => chartData.reduce((s, d) => s + d.sold, 0), [chartData]);
   const avgRate = useMemo(() => chartData.length ? chartData.reduce((s, d) => s + d.rate, 0) / chartData.length : 0, [chartData]);
 
+  const latestSnapshotDate = useMemo(() => {
+    let d = '';
+    for (const r of inventory.rows) {
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (date > d) d = date;
+    }
+    return d;
+  }, [inventory.rows]);
+
+  const channelDist = useMemo(() => {
+    const map = new Map<string, { channel: string; quantity: number; locations: Map<string, number> }>();
+    for (const r of inventory.rows) {
+      if (String(r.recorded_at || '').slice(0, 10) !== latestSnapshotDate) continue;
+      const loc = String(r.location || '');
+      const ch = classifyInventoryLocation(loc);
+      const entry = map.get(ch) ?? { channel: ch, quantity: 0, locations: new Map() };
+      entry.quantity += Number(r.quantity ?? 0);
+      entry.locations.set(loc, (entry.locations.get(loc) ?? 0) + Number(r.quantity ?? 0));
+      map.set(ch, entry);
+    }
+    return [...map.values()].sort((a, b) => b.quantity - a.quantity);
+  }, [inventory.rows, latestSnapshotDate]);
+
+  const channelDrilldown = useMemo(() => {
+    if (!selectedChannel) return [];
+    const ch = channelDist.find((c) => c.channel === selectedChannel);
+    if (!ch) return [];
+    return [...ch.locations.entries()].map(([loc, qty]) => ({ loc, qty })).sort((a, b) => b.qty - a.qty);
+  }, [channelDist, selectedChannel]);
+
+  const maxChannelQty = useMemo(() => Math.max(...channelDist.map((c) => c.quantity), 1), [channelDist]);
+  const maxDrilldownQty = useMemo(() => Math.max(...channelDrilldown.map((c) => c.qty), 1), [channelDrilldown]);
+
+  const trimSearch = search.trim();
+  const filteredChart = useMemo(() => {
+    if (trimSearch.length < 2) return chartData;
+    return chartData.filter((d) => d.sku.includes(trimSearch) || d.name.includes(trimSearch));
+  }, [chartData, trimSearch]);
+  const visibleChart = showAllChart ? filteredChart : filteredChart.slice(0, 15);
+
+  const filteredRows = useMemo(() => {
+    if (trimSearch.length < 2) return inventory.rows;
+    return inventory.rows.filter((r) => String(r.external_sku || '').includes(trimSearch) || String(r.product_name || '').includes(trimSearch));
+  }, [inventory.rows, trimSearch]);
+  const visibleRows = showAllTable ? filteredRows : filteredRows.slice(0, 15);
+
   async function save(data: Row) {
     if (!supabase) return;
     const payload = {
@@ -1030,6 +1090,14 @@ function InventoryPage() {
     <Page title="庫存追蹤" subtitle="各商品庫存分佈與銷售率連動分析">
       {message && <p className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-600">{message}</p>}
 
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => { setSearch(e.target.value); setShowAllChart(false); setShowAllTable(false); }}
+        placeholder="搜尋商品名稱或貨號（輸入 2 字以上）"
+        className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 shadow-soft placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-leaf"
+      />
+
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <p className="mb-3 text-sm font-medium text-slate-500">選擇銷量對比月份</p>
         <div className="flex flex-wrap gap-2">
@@ -1049,7 +1117,47 @@ function InventoryPage() {
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
       </div>
 
-      {chartData.length > 0 && (
+      {channelDist.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <div className="mb-1 flex items-center justify-between">
+            <h3 className="font-semibold">各通路庫存分佈</h3>
+            {latestSnapshotDate && <span className="text-xs text-slate-400">快照日期：{latestSnapshotDate}</span>}
+          </div>
+          <p className="mb-4 text-xs text-slate-400">點擊通路列可展開各門市明細</p>
+          <div className="space-y-2">
+            {channelDist.map((c) => (
+              <div key={c.channel}>
+                <button type="button" onClick={() => setSelectedChannel(selectedChannel === c.channel ? null : c.channel)} className="w-full text-left">
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span className="font-medium text-slate-700">{c.channel}</span>
+                    <span className="text-slate-500">{c.quantity.toLocaleString('zh-TW')} 件 {selectedChannel === c.channel ? '▲' : '▼'}</span>
+                  </div>
+                  <div className="h-4 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div style={{ width: `${c.quantity / maxChannelQty * 100}%` }} className="h-full bg-coral transition-all" />
+                  </div>
+                </button>
+                {selectedChannel === c.channel && (
+                  <div className="mt-3 space-y-1.5 border-l-2 border-coral pl-3">
+                    {channelDrilldown.map((d) => (
+                      <div key={d.loc}>
+                        <div className="mb-0.5 flex items-center justify-between text-xs">
+                          <span className="truncate text-slate-600">{d.loc}</span>
+                          <span className="ml-2 shrink-0 text-slate-500">{d.qty.toLocaleString('zh-TW')} 件</span>
+                        </div>
+                        <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div style={{ width: `${d.qty / maxDrilldownQty * 100}%` }} className="h-full bg-sakura transition-all" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {filteredChart.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-semibold">庫存分佈圖</h3>
@@ -1059,7 +1167,7 @@ function InventoryPage() {
             </div>
           </div>
           <div className="space-y-3">
-            {chartData.map((d) => (
+            {visibleChart.map((d) => (
               <div key={d.sku}>
                 <div className="mb-1 flex items-center justify-between text-xs">
                   <span className="max-w-[55%] truncate font-medium text-slate-700" title={`${d.sku} ${d.name}`}>{d.sku} {d.name}</span>
@@ -1072,10 +1180,22 @@ function InventoryPage() {
               </div>
             ))}
           </div>
+          {filteredChart.length > 15 && (
+            <button type="button" onClick={() => setShowAllChart(!showAllChart)}
+              className="mt-4 w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
+              {showAllChart ? '收起' : `展開全部（共 ${filteredChart.length} 個 SKU）`}
+            </button>
+          )}
         </section>
       )}
 
-      {chartData.length === 0 && !inventory.loading && (
+      {filteredChart.length === 0 && trimSearch.length >= 2 && (
+        <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
+          找不到符合「{trimSearch}」的商品
+        </div>
+      )}
+
+      {chartData.length === 0 && !inventory.loading && trimSearch.length < 2 && (
         <div className="rounded-lg border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
           尚無庫存資料，請新增庫存紀錄
         </div>
@@ -1106,7 +1226,7 @@ function InventoryPage() {
       )}
 
       <Table columns={['盤點日期', 'SKU', '商品名稱', '位置', '數量', '操作']}>
-        {inventory.rows.map((r) => (
+        {visibleRows.map((r) => (
           <tr key={r.id} className="border-t hover:bg-slate-50">
             <td className="p-3 text-sm">{formatFullDate(r.recorded_at)}</td>
             <td className="p-3 text-sm font-mono">{r.external_sku}</td>
@@ -1122,6 +1242,12 @@ function InventoryPage() {
           </tr>
         ))}
       </Table>
+      {filteredRows.length > 15 && (
+        <button type="button" onClick={() => setShowAllTable(!showAllTable)}
+          className="w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
+          {showAllTable ? '收起' : `展開全部（共 ${filteredRows.length} 筆）`}
+        </button>
+      )}
     </Page>
   );
 }
