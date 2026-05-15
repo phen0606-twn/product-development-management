@@ -1536,14 +1536,6 @@ function InventoryPage() {
         <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact />
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
       </div>
-      {/* 診斷資訊 — 確認問題後移除 */}
-      <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-        <p className="font-semibold mb-1">診斷資訊</p>
-        <p>快照原始合計：{snapshotTotal.toLocaleString('zh-TW')} 件（快照日期：{latestSnapshotDate}）</p>
-        <p>快照後扣減：{totalDeducted.toLocaleString('zh-TW')} 件　被扣減月份：{deductedMonths.length > 0 ? deductedMonths.join('、') : '（無）'}</p>
-        <p>快照涵蓋 SKU 數：{latestBySku.length}　庫存記錄總筆數（DB 讀取）：{inventory.rows.length}</p>
-        <p>業績記錄筆數：{sales.rows.length}</p>
-      </div>
 
       {categoryDist.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
