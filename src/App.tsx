@@ -1776,19 +1776,34 @@ function InventoryPage() {
 }
 
 function parseInventoryExcel(data: unknown[][]): Row[] {
-  // Use the SKU header row's total quantity directly — more reliable than summing per-location rows
   const records: Row[] = [];
+  let currentSku = '';
+  let currentName = '';
+  let currentSkuQty = 0;
+  let locRows: Row[] = [];
+
+  function flush() {
+    if (!currentSku) return;
+    // Use per-location rows when available; fall back to SKU header total
+    records.push(...(locRows.length > 0 ? locRows : [{ external_sku: currentSku, product_name: `${currentSku} ${currentName}`, location: '', quantity: currentSkuQty }]));
+    locRows = [];
+  }
+
   for (const row of data) {
     const label = String(row[0] ?? '').trim();
     const qty = Number(row[1] ?? 0);
-    if (!label || label === '商品' || qty <= 0) continue;
+    if (!label || label === '商品') continue;
     const firstWord = label.split(/\s+/)[0] ?? '';
     if (/^[A-Z]{2,}\d/.test(firstWord)) {
-      const sku = firstWord;
-      const name = label.slice(firstWord.length).trim();
-      records.push({ external_sku: sku, product_name: `${sku} ${name}`, location: '', quantity: qty });
+      flush();
+      currentSku = firstWord;
+      currentName = label.slice(firstWord.length).trim();
+      currentSkuQty = qty;
+    } else if (currentSku && qty !== 0 && /^\d{4,6}$|^[A-Z]\d{3}|^0ZZZZ/.test(firstWord)) {
+      locRows.push({ external_sku: currentSku, product_name: `${currentSku} ${currentName}`, location: label, quantity: qty });
     }
   }
+  flush();
   return records;
 }
 
