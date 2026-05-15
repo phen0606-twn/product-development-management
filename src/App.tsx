@@ -1388,6 +1388,9 @@ function InventoryPage() {
   }, [currentBySku, skuToCategory]);
 
   const maxTotal = useMemo(() => Math.max(...chartData.map((d) => d.total), 1), [chartData]);
+  const snapshotTotal = useMemo(() => latestBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [latestBySku]);
+  const totalDeducted = useMemo(() => [...postSnapshotSoldMap.values()].reduce((s, v) => s + v, 0), [postSnapshotSoldMap]);
+  const deductedMonths = useMemo(() => [...new Set(sales.rows.filter((r) => String(r.sold_at || '').slice(0, 7) > latestSnapshotDate.slice(0, 7)).map((r) => String(r.sold_at || '').slice(0, 7)))].sort(), [sales.rows, latestSnapshotDate]);
   const totalStock = useMemo(() => currentBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [currentBySku]);
   const totalSold = useMemo(() => chartData.reduce((s, d) => s + d.sold, 0), [chartData]);
   const avgRate = useMemo(() => chartData.length ? chartData.reduce((s, d) => s + d.rate, 0) / chartData.length : 0, [chartData]);
@@ -1522,6 +1525,14 @@ function InventoryPage() {
         <Card label={`目前庫存量${latestSnapshotDate ? `（${latestSnapshotDate} 快照後自動扣銷）` : ''}`} value={`${totalStock.toLocaleString('zh-TW')} 件`} compact />
         <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact />
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
+      </div>
+      {/* 診斷資訊 — 確認問題後移除 */}
+      <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+        <p className="font-semibold mb-1">診斷資訊</p>
+        <p>快照原始合計：{snapshotTotal.toLocaleString('zh-TW')} 件（快照日期：{latestSnapshotDate}）</p>
+        <p>快照後扣減：{totalDeducted.toLocaleString('zh-TW')} 件</p>
+        <p>被扣減的月份：{deductedMonths.length > 0 ? deductedMonths.join('、') : '（無）'}</p>
+        <p>快照涵蓋 SKU 數：{latestBySku.length}　業績記錄筆數：{sales.rows.length}</p>
       </div>
 
       {categoryDist.length > 0 && (
