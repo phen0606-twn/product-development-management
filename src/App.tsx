@@ -1323,8 +1323,11 @@ function InventoryPage() {
   const postSnapshotSoldMap = useMemo(() => {
     const map = new Map<string, number>();
     if (!latestSnapshotDate) return map;
+    // Sales data is stored at month-end granularity, so compare by month only
+    // to avoid deducting same-month sales that are already reflected in the snapshot
+    const snapshotMonth = latestSnapshotDate.slice(0, 7);
     for (const r of sales.rows) {
-      if (String(r.sold_at || '').slice(0, 10) <= latestSnapshotDate) continue;
+      if (String(r.sold_at || '').slice(0, 7) <= snapshotMonth) continue;
       const sku = String(r.external_sku || '');
       if (sku) map.set(sku, (map.get(sku) ?? 0) + Number(r.quantity ?? 0));
     }
