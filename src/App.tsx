@@ -1773,21 +1773,17 @@ function InventoryPage() {
 }
 
 function parseInventoryExcel(data: unknown[][]): Row[] {
+  // Use the SKU header row's total quantity directly — more reliable than summing per-location rows
   const records: Row[] = [];
-  let currentSku = '';
-  let currentName = '';
   for (const row of data) {
     const label = String(row[0] ?? '').trim();
     const qty = Number(row[1] ?? 0);
-    if (!label || label === '商品') continue;
+    if (!label || label === '商品' || qty <= 0) continue;
     const firstWord = label.split(/\s+/)[0] ?? '';
     if (/^[A-Z]{2,}\d/.test(firstWord)) {
-      currentSku = firstWord;
-      currentName = label.slice(firstWord.length).trim();
-      continue;
-    }
-    if (/^\d{6}|^[A-Z]\d{3}|^0ZZZZ/.test(firstWord) && currentSku) {
-      records.push({ external_sku: currentSku, product_name: `${currentSku} ${currentName}`, location: label, quantity: qty });
+      const sku = firstWord;
+      const name = label.slice(firstWord.length).trim();
+      records.push({ external_sku: sku, product_name: `${sku} ${name}`, location: '', quantity: qty });
     }
   }
   return records;
@@ -1857,7 +1853,7 @@ function ImportPage() {
     setRecordDate(date);
     setInvMsg('解析中...');
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const workbook = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const data: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
     const rows = parseInventoryExcel(data);
