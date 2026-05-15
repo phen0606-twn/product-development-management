@@ -210,10 +210,20 @@ function useRows(table: string, order = 'created_at') {
   async function load() {
     if (!supabase) return setLoading(false);
     setLoading(true);
-    const query = supabase.from(table).select('*').limit(20000);
-    const { data, error } = order ? await query.order(order, { ascending: false }) : await query;
-    setRows(data ?? []);
-    setError(error?.message ?? '');
+    const PAGE = 1000;
+    const all: Row[] = [];
+    let from = 0;
+    while (true) {
+      const q = supabase.from(table).select('*').range(from, from + PAGE - 1);
+      const { data, error: err } = order ? await q.order(order, { ascending: false }) : await q;
+      if (err) { setError(err.message); setLoading(false); return; }
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+    setRows(all);
+    setError('');
     setLoading(false);
   }
   useEffect(() => void load(), [table]);
