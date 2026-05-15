@@ -1882,14 +1882,15 @@ function ImportPage() {
   async function doInvImport() {
     if (!supabase || invRows.length === 0) return;
     setInvImporting(true);
-    const { error: delErr } = await supabase.from('inventory_records').delete().eq('recorded_at', recordDate);
+    // Delete ALL inventory records so stale imports from other dates don't contaminate results
+    const { error: delErr } = await supabase.from('inventory_records').delete().gte('recorded_at', '2000-01-01');
     if (delErr) { setInvMsg(`刪除失敗：${delErr.message}`); setInvImporting(false); return; }
     const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
     for (let i = 0; i < rowsWithDate.length; i += 500) {
       const { error } = await supabase.from('inventory_records').insert(rowsWithDate.slice(i, i + 500));
       if (error) { setInvMsg(`匯入失敗：${error.message}`); setInvImporting(false); return; }
     }
-    setInvMsg(`✓ 已覆蓋 ${recordDate} 舊庫存，匯入 ${invRows.length} 筆（${new Set(invRows.map((r) => r.external_sku)).size} 個 SKU）。`);
+    setInvMsg(`✓ 已清除舊庫存，匯入 ${recordDate} 共 ${invRows.length} 筆（${new Set(invRows.map((r) => r.external_sku)).size} 個 SKU）。`);
     setInvRows([]);
     setInvImporting(false);
   }
