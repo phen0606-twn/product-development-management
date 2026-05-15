@@ -210,7 +210,7 @@ function useRows(table: string, order = 'created_at') {
   async function load() {
     if (!supabase) return setLoading(false);
     setLoading(true);
-    const query = supabase.from(table).select('*').limit(3000);
+    const query = supabase.from(table).select('*').limit(20000);
     const { data, error } = order ? await query.order(order, { ascending: false }) : await query;
     setRows(data ?? []);
     setError(error?.message ?? '');
