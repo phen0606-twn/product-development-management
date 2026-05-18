@@ -1187,13 +1187,18 @@ function ChannelAnalysisPage() {
       });
   }, []);
 
+  const [debugMsg, setDebugMsg] = useState('');
   // Fetch data for the selected month directly — avoids the global 3000-row cap
   useEffect(() => {
     if (!supabase) return;
     setLoading(true);
     setSelectedSku('');
     supabase.from('product_store_sales').select('*').gte('sales_month', `${selectedMonth}-01`).lte('sales_month', monthEnd(selectedMonth)).limit(5000)
-      .then(({ data }) => { setMonthRows(data ?? []); setLoading(false); });
+      .then(({ data, error }) => {
+        setMonthRows(data ?? []);
+        setDebugMsg(error ? `錯誤：${error.message}` : `查詢到 ${data?.length ?? 0} 筆（${selectedMonth}-01 ～ ${monthEnd(selectedMonth)}）`);
+        setLoading(false);
+      });
   }, [selectedMonth]);
 
   const topByChannel = useMemo(
@@ -1257,6 +1262,7 @@ function ChannelAnalysisPage() {
       </section>
 
       {loading && <p className="text-sm text-slate-400">載入中...</p>}
+      {debugMsg && <p className="text-xs text-slate-400 -mt-2">{debugMsg}</p>}
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <h3 className="mb-1 font-semibold">商品跨規格門市查詢</h3>
