@@ -722,8 +722,8 @@ function ProductDetailPage() {
                         <div className={`mt-2 ${gc}`}>
                           {imgs.map((src, i) => (
                             <img key={i} src={src} alt={`附圖${i + 1}`}
-                              className="w-full rounded-md object-cover cursor-zoom-in"
-                              style={{ maxHeight: imgs.length === 1 ? '200px' : imgs.length === 2 ? '160px' : '120px' }}
+                              className="w-full rounded-md object-contain bg-slate-50 cursor-zoom-in"
+                              style={{ maxHeight: imgs.length === 1 ? '160px' : imgs.length === 2 ? '120px' : '100px' }}
                               onClick={() => window.open(src, '_blank')} />
                           ))}
                         </div>
