@@ -508,6 +508,7 @@ function ProductDetailPage() {
       completed_at: data.completed_at || null,
       is_completed: Boolean(data.completed_at),
       image_url: data.image_url ?? null,
+      image_urls: data.image_urls ?? null,
     });
     let error: any = null;
     if (editing?.id) {
@@ -713,14 +714,21 @@ function ProductDetailPage() {
                       {progressSoon && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">即將到期</span>}
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{row.content}</p>
-                    {row.image_url && (
-                      <img
-                        src={String(row.image_url)}
-                        alt="進度附圖"
-                        className="mt-2 max-h-52 cursor-zoom-in rounded-md object-contain"
-                        onClick={() => window.open(String(row.image_url), '_blank')}
-                      />
-                    )}
+                    {(() => {
+                      const imgs = parseImgUrls(row);
+                      if (!imgs.length) return null;
+                      const gc = imgs.length === 1 ? '' : imgs.length === 2 ? 'grid grid-cols-2 gap-1' : 'grid grid-cols-3 gap-1';
+                      return (
+                        <div className={`mt-2 ${gc}`}>
+                          {imgs.map((src, i) => (
+                            <img key={i} src={src} alt={`附圖${i + 1}`}
+                              className="w-full rounded-md object-cover cursor-zoom-in"
+                              style={{ maxHeight: imgs.length === 1 ? '13rem' : imgs.length === 2 ? '9rem' : '7rem' }}
+                              onClick={() => window.open(src, '_blank')} />
+                          ))}
+                        </div>
+                      );
+                    })()}
                     <p className="mt-2 text-xs text-slate-500">日期：{row.started_at || '-'}　預計完成：{row.expected_completed_at || '-'}　完成日：{row.completed_at || '-'}</p>
                   </div>
                   <ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => removeProgress(row)} />
@@ -958,35 +966,47 @@ async function resizeImage(file: File, maxPx = 1200, quality = 0.78): Promise<st
   });
 }
 
+function parseImgUrls(row: Row | null): string[] {
+  if (!row) return [];
+  if (row.image_urls) { try { return JSON.parse(String(row.image_urls)); } catch {} }
+  if (row.image_url) return [String(row.image_url)];
+  return [];
+}
+
 function ProgressForm({ row, onSave, onCancel }: { row: Row | null; onSave: (data: Row) => void; onCancel: () => void }) {
   const [data, setData] = useState<Row>(row ?? {});
-  const [preview, setPreview] = useState<string>(row?.image_url || '');
+  const [images, setImages] = useState<string[]>(parseImgUrls(row));
   const [resizing, setResizing] = useState(false);
+
+  // Max px shrinks as image count grows: 1→1200, 2→900, 3→720
+  const maxPx = [1200, 900, 720][Math.min(images.length, 2)];
 
   async function handleImg(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || images.length >= 3) return;
+    e.target.value = '';
     setResizing(true);
-    try {
-      const b64 = await resizeImage(file);
-      setPreview(b64);
-      setData((d) => ({ ...d, image_url: b64 }));
-    } catch { /* ignore */ }
+    try { setImages((prev) => { const next = [...prev]; next.push('__loading__'); return next; });
+      const b64 = await resizeImage(file, maxPx);
+      setImages((prev) => { const next = [...prev]; next[next.indexOf('__loading__')] = b64; return next; });
+    } catch { setImages((prev) => prev.filter((s) => s !== '__loading__')); }
     setResizing(false);
   }
 
-  function clearImg() { setPreview(''); setData((d) => ({ ...d, image_url: null })); }
+  function removeImg(idx: number) { setImages((prev) => prev.filter((_, i) => i !== idx)); }
 
   const field = (key: string, label: string, type = 'text', span = 1) => (
-    <label key={key} className={`text-sm ${span === 3 ? 'md:col-span-3' : span === 2 ? 'md:col-span-2' : ''}`}>{label}
+    <label key={key} className={`text-sm ${span === 3 ? 'md:col-span-3' : ''}`}>{label}
       {type === 'textarea'
         ? <textarea value={data[key] ?? ''} onChange={(e) => setData((d) => ({ ...d, [key]: e.target.value }))} className="mt-1 min-h-24 w-full rounded-md border px-3 py-2" />
         : <input type={type} value={data[key] ?? ''} onChange={(e) => setData((d) => ({ ...d, [key]: e.target.value }))} className="mt-1 w-full rounded-md border px-3 py-2" />}
     </label>
   );
 
+  const gridCls = images.length === 0 ? 'grid-cols-1' : images.length === 1 ? 'grid-cols-1' : images.length === 2 ? 'grid-cols-2' : 'grid-cols-3';
+
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(data); }} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+    <form onSubmit={(e) => { e.preventDefault(); onSave({ ...data, image_urls: images.length ? JSON.stringify(images) : null, image_url: images[0] || null }); }} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
       <h3 className="mb-4 font-semibold">{row ? '編輯進度' : '新增進度'}</h3>
       <div className="grid gap-4 md:grid-cols-3">
         <label className="text-sm">階段
@@ -999,16 +1019,27 @@ function ProgressForm({ row, onSave, onCancel }: { row: Row | null; onSave: (dat
         {field('content', '內容', 'textarea', 3)}
         {field('expected_completed_at', '預計完成日', 'date')}
         {field('completed_at', '完成日', 'date')}
-        <label className="text-sm">附圖（JPG / PNG，自動壓縮）
-          <input type="file" accept="image/*" onChange={handleImg} className="mt-1 block w-full text-sm text-slate-500 file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-sm" />
-          {resizing && <p className="mt-1 text-xs text-slate-400">壓縮中...</p>}
-          {preview && (
-            <div className="relative mt-2 inline-block">
-              <img src={preview} alt="preview" className="max-h-32 rounded-md object-cover" />
-              <button type="button" onClick={clearImg} className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs text-white leading-none">✕</button>
-            </div>
-          )}
-        </label>
+        <div className="md:col-span-3">
+          <p className="mb-2 text-sm text-slate-600">附圖（最多 3 張，自動壓縮；圖愈多壓愈小）</p>
+          <div className={`grid gap-2 ${gridCls}`}>
+            {images.map((src, i) => (
+              <div key={i} className="relative">
+                {src === '__loading__'
+                  ? <div className="flex aspect-video items-center justify-center rounded-md bg-slate-100 text-xs text-slate-400">壓縮中...</div>
+                  : <>
+                      <img src={src} alt={`附圖${i + 1}`} className="aspect-video w-full rounded-md object-cover" />
+                      <button type="button" onClick={() => removeImg(i)} className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs text-white leading-none">✕</button>
+                    </>}
+              </div>
+            ))}
+            {images.length < 3 && !resizing && (
+              <label className="flex aspect-video cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-slate-300 text-sm text-slate-400 hover:border-leaf hover:text-leaf">
+                <input type="file" accept="image/*" onChange={handleImg} className="hidden" />
+                + 新增圖片
+              </label>
+            )}
+          </div>
+        </div>
       </div>
       <div className="mt-5 flex gap-2">
         <button className="rounded-md bg-leaf px-4 py-2 text-sm text-white">儲存</button>
