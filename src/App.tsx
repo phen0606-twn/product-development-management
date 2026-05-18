@@ -1192,7 +1192,7 @@ function ChannelAnalysisPage() {
     if (!supabase) return;
     setLoading(true);
     setSelectedSku('');
-    supabase.from('product_store_sales').select('*').eq('sales_month', `${selectedMonth}-01`).limit(5000)
+    supabase.from('product_store_sales').select('*').gte('sales_month', `${selectedMonth}-01`).lte('sales_month', monthEnd(selectedMonth)).limit(5000)
       .then(({ data }) => { setMonthRows(data ?? []); setLoading(false); });
   }, [selectedMonth]);
 
@@ -1970,18 +1970,20 @@ function ImportPage() {
   async function doSalesImport() {
     if (!supabase || salesRows.length === 0) return;
     setSalesImporting(true);
-    const monthStart = `${importMonth}-01`;
-    const salesMonth = `${importMonth}-01`;
-    const { error: delErr } = await supabase.from('sales_records').delete().gte('sold_at', monthStart).lte('sold_at', monthEnd(importMonth));
-    if (delErr) { setSalesMsg(`刪除失敗：${delErr.message}`); setSalesImporting(false); return; }
-    await supabase.from('channel_sales_records').delete().eq('sales_month', salesMonth);
-    await supabase.from('channel_store_sales_records').delete().eq('sales_month', salesMonth);
-    await supabase.from('product_store_sales').delete().eq('sales_month', salesMonth);
+    // Delete only the specific sold_at dates from this import (preserves other weeks)
+    const soldDates = [...new Set(salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
+    for (const date of soldDates) {
+      await supabase.from('sales_records').delete().eq('sold_at', date);
+      await supabase.from('channel_sales_records').delete().eq('sales_month', date);
+      await supabase.from('channel_store_sales_records').delete().eq('sales_month', date);
+      await supabase.from('product_store_sales').delete().eq('sales_month', date);
+    }
     const { error } = await supabase.from('sales_records').insert(salesRows);
     if (!error && channelRows.length) await supabase.from('channel_sales_records').insert(channelRows);
     if (!error && storeRows.length) await supabase.from('channel_store_sales_records').insert(storeRows);
     if (!error && productStoreRows.length) await supabase.from('product_store_sales').insert(productStoreRows);
-    setSalesMsg(error ? `匯入失敗：${error.message}` : `✓ 已覆蓋 ${importMonth} 舊資料，匯入 ${salesRows.length} 筆業績。`);
+    const dateLabel = soldDates.join('、') || importMonth;
+    setSalesMsg(error ? `匯入失敗：${error.message}` : `✓ 已匯入 ${dateLabel} 業績（${salesRows.length} 筆），其餘週資料不受影響。`);
     if (!error) { setSalesRows([]); setChannelRows([]); setStoreRows([]); setProductStoreRows([]); }
     setSalesImporting(false);
   }
@@ -2037,7 +2039,7 @@ function ImportPage() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm text-slate-500">{salesFile}｜{salesRows.length.toLocaleString('zh-TW')} 筆｜{totalQty.toLocaleString('zh-TW')} 件｜{formatCurrency(totalRevenue)}</p>
-                <p className="mt-1 text-xs text-amber-600">⚠ 確認後 {importMonth} 舊業績將全部覆蓋</p>
+                <p className="mt-1 text-xs text-amber-600">⚠ 確認後將覆蓋相同週期舊資料，其他週資料保留</p>
               </div>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setSalesRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
@@ -2398,12 +2400,12 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
       const channel = classifyStore(label);
       const storeName = label.replace(/^\S+\s*/, '');
       const key = `${channel}::${storeName}`;
-      const existing = storeTotals.get(key) || { sales_month: salesMonth, channel_category: channel, store_name: storeName, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
+      const existing = storeTotals.get(key) || { sales_month: soldAt, channel_category: channel, store_name: storeName, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
       existing.quantity += quantity;
       existing.revenue += revenue;
       storeTotals.set(key, existing);
       productStoreRows.push({
-        sales_month: salesMonth,
+        sales_month: soldAt,
         external_sku: String(currentProduct.external_sku || ''),
         external_product_name: String(currentProduct.external_product_name || ''),
         channel_category: channel,
@@ -2442,7 +2444,7 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
   const storeRows = [...storeTotals.values()];
   const channelRows = Object.values(storeRows.reduce((acc, row) => {
     const key = row.channel_category;
-    acc[key] ??= { sales_month: salesMonth, channel_category: key, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
+    acc[key] ??= { sales_month: soldAt, channel_category: key, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
     acc[key].quantity += Number(row.quantity ?? 0);
     acc[key].revenue += Number(row.revenue ?? 0);
     return acc;
