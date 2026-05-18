@@ -1310,6 +1310,7 @@ function ChannelAnalysisPage() {
 
       <section>
         <h3 className="mb-3 font-semibold">各通路商品前三名</h3>
+        <p className="mb-2 text-xs text-slate-400">debug: {topByChannel.map(c => `${c.channel}=${c.products.length}筆`).join('、')}</p>
         <div className="grid gap-4 md:grid-cols-3">
           {topByChannel.map(({ channel, products }) => (
             <div key={channel} className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
