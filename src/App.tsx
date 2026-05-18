@@ -723,7 +723,7 @@ function ProductDetailPage() {
                           {imgs.map((src, i) => (
                             <img key={i} src={src} alt={`附圖${i + 1}`}
                               className="w-full rounded-md object-cover cursor-zoom-in"
-                              style={{ maxHeight: imgs.length === 1 ? '600px' : imgs.length === 2 ? '400px' : '300px' }}
+                              style={{ maxHeight: imgs.length === 1 ? '200px' : imgs.length === 2 ? '160px' : '120px' }}
                               onClick={() => window.open(src, '_blank')} />
                           ))}
                         </div>
