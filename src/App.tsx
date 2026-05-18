@@ -1262,7 +1262,7 @@ function ChannelAnalysisPage() {
       </section>
 
       {loading && <p className="text-sm text-slate-400">載入中...</p>}
-      {debugMsg && <p className="text-xs text-slate-400 -mt-2">{debugMsg}</p>}
+      {debugMsg && <p className="text-xs text-slate-400 -mt-2">{debugMsg}　通路分布：{[...new Set(monthRows.map(r => String(r.channel_category)))].map(ch => `${ch}(${monthRows.filter(r => r.channel_category === ch).length})`).join('、') || '（無）'}</p>}
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <h3 className="mb-1 font-semibold">商品跨規格門市查詢</h3>
