@@ -1187,18 +1187,13 @@ function ChannelAnalysisPage() {
       });
   }, []);
 
-  const [debugMsg, setDebugMsg] = useState('');
   // Fetch data for the selected month directly — avoids the global 3000-row cap
   useEffect(() => {
     if (!supabase) return;
     setLoading(true);
     setSelectedSku('');
     supabase.from('product_store_sales').select('*').gte('sales_month', `${selectedMonth}-01`).lte('sales_month', monthEnd(selectedMonth)).limit(5000)
-      .then(({ data, error }) => {
-        setMonthRows(data ?? []);
-        setDebugMsg(error ? `錯誤：${error.message}` : `查詢到 ${data?.length ?? 0} 筆（${selectedMonth}-01 ～ ${monthEnd(selectedMonth)}）`);
-        setLoading(false);
-      });
+      .then(({ data }) => { setMonthRows(data ?? []); setLoading(false); });
   }, [selectedMonth]);
 
   const topByChannel = useMemo(
@@ -1262,7 +1257,6 @@ function ChannelAnalysisPage() {
       </section>
 
       {loading && <p className="text-sm text-slate-400">載入中...</p>}
-      {debugMsg && <p className="text-xs text-slate-400 -mt-2">{debugMsg}　通路分布：{[...new Set(monthRows.map(r => String(r.channel_category)))].map(ch => `${ch}(${monthRows.filter(r => r.channel_category === ch).length})`).join('、') || '（無）'}</p>}
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <h3 className="mb-1 font-semibold">商品跨規格門市查詢</h3>
@@ -1310,7 +1304,6 @@ function ChannelAnalysisPage() {
 
       <section>
         <h3 className="mb-3 font-semibold">各通路商品前三名</h3>
-        <p className="mb-2 text-xs text-slate-400">debug: {topByChannel.map(c => `${c.channel}=${c.products.length}筆`).join('、')}</p>
         <div className="grid gap-4 md:grid-cols-3">
           {topByChannel.map(({ channel, products }) => (
             <div key={channel} className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
