@@ -507,6 +507,7 @@ function ProductDetailPage() {
       expected_completed_at: data.expected_completed_at || null,
       completed_at: data.completed_at || null,
       is_completed: Boolean(data.completed_at),
+      image_url: data.image_url ?? null,
     });
     let error: any = null;
     if (editing?.id) {
@@ -712,6 +713,14 @@ function ProductDetailPage() {
                       {progressSoon && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">即將到期</span>}
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{row.content}</p>
+                    {row.image_url && (
+                      <img
+                        src={String(row.image_url)}
+                        alt="進度附圖"
+                        className="mt-2 max-h-52 cursor-zoom-in rounded-md object-contain"
+                        onClick={() => window.open(String(row.image_url), '_blank')}
+                      />
+                    )}
                     <p className="mt-2 text-xs text-slate-500">日期：{row.started_at || '-'}　預計完成：{row.expected_completed_at || '-'}　完成日：{row.completed_at || '-'}</p>
                   </div>
                   <ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => removeProgress(row)} />
@@ -930,12 +939,83 @@ function VendorForm({ row, onSave, onCancel }: { row: Row | null; onSave: (data:
   ]} />;
 }
 
+async function resizeImage(file: File, maxPx = 1200, quality = 0.78): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('圖片讀取失敗')); };
+    img.src = url;
+  });
+}
+
 function ProgressForm({ row, onSave, onCancel }: { row: Row | null; onSave: (data: Row) => void; onCancel: () => void }) {
-  return <DataForm title={row ? '重新編輯進度' : '新增進度'} row={row} onSave={onSave} onCancel={onCancel} fields={[
-    ['stage', '階段', 'select', stageOptions.map((s) => [s, s])],
-    ['started_at', '日期', 'date'], ['title', '標題'], ['content', '內容', 'textarea'],
-    ['expected_completed_at', '預計完成日', 'date'], ['completed_at', '完成日', 'date'],
-  ]} />;
+  const [data, setData] = useState<Row>(row ?? {});
+  const [preview, setPreview] = useState<string>(row?.image_url || '');
+  const [resizing, setResizing] = useState(false);
+
+  async function handleImg(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setResizing(true);
+    try {
+      const b64 = await resizeImage(file);
+      setPreview(b64);
+      setData((d) => ({ ...d, image_url: b64 }));
+    } catch { /* ignore */ }
+    setResizing(false);
+  }
+
+  function clearImg() { setPreview(''); setData((d) => ({ ...d, image_url: null })); }
+
+  const field = (key: string, label: string, type = 'text', span = 1) => (
+    <label key={key} className={`text-sm ${span === 3 ? 'md:col-span-3' : span === 2 ? 'md:col-span-2' : ''}`}>{label}
+      {type === 'textarea'
+        ? <textarea value={data[key] ?? ''} onChange={(e) => setData((d) => ({ ...d, [key]: e.target.value }))} className="mt-1 min-h-24 w-full rounded-md border px-3 py-2" />
+        : <input type={type} value={data[key] ?? ''} onChange={(e) => setData((d) => ({ ...d, [key]: e.target.value }))} className="mt-1 w-full rounded-md border px-3 py-2" />}
+    </label>
+  );
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(data); }} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+      <h3 className="mb-4 font-semibold">{row ? '編輯進度' : '新增進度'}</h3>
+      <div className="grid gap-4 md:grid-cols-3">
+        <label className="text-sm">階段
+          <select value={data.stage ?? ''} onChange={(e) => setData((d) => ({ ...d, stage: e.target.value }))} className="mt-1 w-full rounded-md border px-3 py-2">
+            <option value="">請選擇</option>{stageOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+        {field('started_at', '日期', 'date')}
+        {field('title', '標題')}
+        {field('content', '內容', 'textarea', 3)}
+        {field('expected_completed_at', '預計完成日', 'date')}
+        {field('completed_at', '完成日', 'date')}
+        <label className="text-sm">附圖（JPG / PNG，自動壓縮）
+          <input type="file" accept="image/*" onChange={handleImg} className="mt-1 block w-full text-sm text-slate-500 file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-sm" />
+          {resizing && <p className="mt-1 text-xs text-slate-400">壓縮中...</p>}
+          {preview && (
+            <div className="relative mt-2 inline-block">
+              <img src={preview} alt="preview" className="max-h-32 rounded-md object-cover" />
+              <button type="button" onClick={clearImg} className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs text-white leading-none">✕</button>
+            </div>
+          )}
+        </label>
+      </div>
+      <div className="mt-5 flex gap-2">
+        <button className="rounded-md bg-leaf px-4 py-2 text-sm text-white">儲存</button>
+        <button type="button" onClick={onCancel} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
+      </div>
+    </form>
+  );
 }
 
 function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | null; products: Row[]; batches: Row[]; onSave: (data: Row) => void; onCancel: () => void }) {
