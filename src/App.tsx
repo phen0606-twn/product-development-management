@@ -1369,6 +1369,7 @@ function InventoryPage() {
   const inventory = useRows('inventory_records', 'recorded_at');
   const sales = useRows('sales_records', 'sold_at');
   const products = useRows('products', 'created_at');
+  const skuCosts = useRows('sku_costs', 'external_sku');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -1519,31 +1520,22 @@ function InventoryPage() {
   const totalSold = useMemo(() => chartData.reduce((s, d) => s + d.sold, 0), [chartData]);
   const avgRate = useMemo(() => chartData.length ? chartData.reduce((s, d) => s + d.rate, 0) / chartData.length : 0, [chartData]);
 
-  // 各 SKU 平均售價（從業績記錄推算）
-  const skuAvgPrice = useMemo(() => {
-    const map = new Map<string, { rev: number; qty: number }>();
-    for (const r of sales.rows) {
-      const sku = String(r.external_sku || '');
-      const qty = Number(r.quantity ?? 0);
-      const rev = Number(r.revenue ?? 0);
-      if (!sku || qty <= 0) continue;
-      const cur = map.get(sku) ?? { rev: 0, qty: 0 };
-      map.set(sku, { rev: cur.rev + rev, qty: cur.qty + qty });
+  // 各 SKU 單位成本（從 sku_costs 表）
+  const skuCostMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of skuCosts.rows) {
+      map.set(String(r.external_sku || ''), Number(r.unit_cost ?? 0));
     }
-    const priceMap = new Map<string, number>();
-    for (const [sku, { rev, qty }] of map) {
-      if (qty > 0) priceMap.set(sku, rev / qty);
-    }
-    return priceMap;
-  }, [sales.rows]);
+    return map;
+  }, [skuCosts.rows]);
 
   const totalInventoryValue = useMemo(() =>
     currentBySku.reduce((s, r) => {
       const sku = String(r.external_sku || '');
-      const price = skuAvgPrice.get(sku) ?? 0;
-      return s + Number(r.quantity ?? 0) * price;
+      const cost = skuCostMap.get(sku) ?? 0;
+      return s + Number(r.quantity ?? 0) * cost;
     }, 0),
-    [currentBySku, skuAvgPrice],
+    [currentBySku, skuCostMap],
   );
 
   const channelDist = useMemo(() => {
@@ -1675,7 +1667,7 @@ function InventoryPage() {
 
       <div className="grid gap-3 md:grid-cols-4">
         <Card label={`目前庫存量${latestSnapshotDate ? `（${latestSnapshotDate} 快照後自動扣銷）` : ''}`} value={`${totalStock.toLocaleString('zh-TW')} 件`} compact />
-        <Card label="庫存金額（依平均售價估算）" value={formatCurrency(totalInventoryValue)} compact />
+        <Card label="庫存成本金額" value={formatCurrency(totalInventoryValue)} compact />
         <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact />
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
       </div>
