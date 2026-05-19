@@ -1593,7 +1593,8 @@ function InventoryPage() {
   const trimSearch = search.trim();
   const filteredMerged = useMemo(() => {
     if (trimSearch.length < 2) return chartData;
-    return chartData.filter((d) => d.sku.includes(trimSearch) || d.name.includes(trimSearch));
+    const keywords = trimSearch.split(/\s+/).filter((k) => k.length > 0);
+    return chartData.filter((d) => keywords.some((k) => d.sku.includes(k) || d.name.includes(k)));
   }, [chartData, trimSearch]);
   const visibleMerged = showAll ? filteredMerged : filteredMerged.slice(0, 15);
 
