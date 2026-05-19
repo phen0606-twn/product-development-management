@@ -1361,7 +1361,7 @@ function classifyInventoryLocation(loc: string): string {
   if (/^P002\s|^A000\s/.test(loc)) return '網路／平台';
   if (/^P003\s/.test(loc)) return '總倉';
   if (/捷運|M6/.test(loc)) return '捷運門市';
-  if (/高雄|台南|新竹|宜蘭/.test(loc)) return '加盟門市';
+  if (/高雄|台南|台中|新竹|宜蘭/.test(loc)) return '加盟門市';
   return '街邊店';
 }
 
