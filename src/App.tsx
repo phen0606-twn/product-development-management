@@ -1359,7 +1359,7 @@ function classifyInventoryLocation(loc: string): string {
   if (/^0ZZZZ/.test(loc)) return '在途';
   if (/^E\d{3}/.test(loc)) return '網路／平台';
   if (/^P002\s|^A000\s/.test(loc)) return '網路／平台';
-  if (/^P003\s/.test(loc)) return 'P003';
+  if (/^P003\s/.test(loc)) return '總倉';
   if (/捷運|M6/.test(loc)) return '捷運門市';
   return '街邊店';
 }
@@ -1529,7 +1529,7 @@ function InventoryPage() {
       entry.locations.set(loc, (entry.locations.get(loc) ?? 0) + Number(r.quantity ?? 0));
       map.set(ch, entry);
     }
-    const SHOWN = new Set(['總倉', '街邊店', '捷運門市', '網路／平台', 'P003']);
+    const SHOWN = new Set(['總倉', '街邊店', '捷運門市', '網路／平台']);
     return [...map.values()].filter((c) => SHOWN.has(c.channel)).sort((a, b) => b.quantity - a.quantity);
   }, [inventory.rows, latestSnapshotDate]);
 
