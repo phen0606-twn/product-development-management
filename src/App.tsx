@@ -867,11 +867,15 @@ function CostsPage() {
   const paid = monthRows.reduce((s, c) => s + Number(c.paid_amount ?? 0) * Number(c.exchange_rate_to_twd || 1), 0);
   const unpaidRows = costs.rows.filter((c) => c.payment_status !== 'paid').sort((a, b) => String(a.due_date || a.created_at).localeCompare(String(b.due_date || b.created_at)));
 
+  const [saveError, setSaveError] = useState('');
+
   async function save(data: Row) {
+    setSaveError('');
     const payload = clean({
       product_id: data.product_id || null,
       batch_id: data.batch_id || null,
-      type: data.type,
+      vendor_id: data.vendor_id || null,
+      type: data.type || null,
       custom_type: data.type === '其他' ? data.custom_type : null,
       description: data.description,
       amount: parseNumber(data.amount),
@@ -881,10 +885,13 @@ function CostsPage() {
       bank_fee_twd: parseNumber(data.bank_fee_twd),
       paid_at: data.paid_at || null,
       due_date: data.due_date || null,
+      payment_status: data.payment_status || 'unpaid',
       notes: data.notes,
     });
-    if (editing?.id) await supabase?.from('development_costs').update(payload).eq('id', editing.id);
-    else await supabase?.from('development_costs').insert(payload);
+    const { error } = editing?.id
+      ? await supabase!.from('development_costs').update(payload).eq('id', editing.id)
+      : await supabase!.from('development_costs').insert(payload);
+    if (error) { setSaveError(`儲存失敗：${error.message}`); return; }
     setOpen(false);
     setEditing(null);
     costs.reload();
@@ -949,7 +956,8 @@ function CostsPage() {
           )}
         </section>
       )}
-      {open && <CostForm row={editing} products={products.rows} batches={batches.rows} onCancel={() => setOpen(false)} onSave={save} />}
+      {saveError && <p className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-600">{saveError}</p>}
+      {open && <CostForm row={editing} products={products.rows} batches={batches.rows} onCancel={() => { setOpen(false); setSaveError(''); }} onSave={save} />}
       <Table columns={['付款日', '商品', '類型', '說明', '金額', '匯率', '手續費', '台幣總額', '操作']}>
         {monthRows.map((row) => (
           <tr key={row.id} className="border-t align-top">
