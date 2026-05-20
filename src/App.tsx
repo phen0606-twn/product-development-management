@@ -487,6 +487,25 @@ function ProductDetailPage() {
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchData, setBatchData] = useState<Row>({});
+  const [batchSaving, setBatchSaving] = useState(false);
+
+  async function saveBatch() {
+    if (!batchData.name?.trim() || !supabase) return;
+    setBatchSaving(true);
+    await supabase.from('product_batches').insert(clean({
+      product_id: id,
+      name: batchData.name.trim(),
+      ordered_at: batchData.ordered_at || null,
+      quantity: parseNumber(batchData.quantity) || null,
+      notes: batchData.notes || null,
+    }));
+    setBatchOpen(false);
+    setBatchData({});
+    setBatchSaving(false);
+    batches.reload();
+  }
 
   async function saveProgress(data: Row) {
     const eventPayload = clean({
@@ -575,8 +594,34 @@ function ProductDetailPage() {
       <section>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-base font-semibold text-ink">批次費用明細</h3>
-          <Link to="/costs" className="text-sm text-leaf hover:underline">前往費用管理 →</Link>
+          <div className="flex gap-3">
+            <button type="button" onClick={() => { setBatchOpen(!batchOpen); setBatchData({}); }} className="rounded-md border border-leaf px-3 py-1.5 text-sm text-leaf hover:bg-leaf hover:text-white">＋ 新增批次</button>
+            <Link to="/costs" className="text-sm text-leaf hover:underline self-center">前往費用管理 →</Link>
+          </div>
         </div>
+        {batchOpen && (
+          <div className="mb-4 rounded-lg border border-leaf/30 bg-green-50 p-4">
+            <p className="mb-3 text-sm font-medium text-leaf">新增採購批次</p>
+            <div className="grid gap-3 md:grid-cols-4">
+              <label className="text-sm md:col-span-2">批次名稱（必填）
+                <input value={batchData.name ?? ''} onChange={(e) => setBatchData({ ...batchData, name: e.target.value })} placeholder="例：2025 第一批" className="mt-1 w-full rounded-md border px-3 py-2" />
+              </label>
+              <label className="text-sm">下單日期
+                <input type="date" value={batchData.ordered_at ?? ''} onChange={(e) => setBatchData({ ...batchData, ordered_at: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+              </label>
+              <label className="text-sm">採購數量
+                <input type="number" value={batchData.quantity ?? ''} onChange={(e) => setBatchData({ ...batchData, quantity: e.target.value })} placeholder="件數" className="mt-1 w-full rounded-md border px-3 py-2" />
+              </label>
+              <label className="text-sm md:col-span-4">備註
+                <input value={batchData.notes ?? ''} onChange={(e) => setBatchData({ ...batchData, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+              </label>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button type="button" onClick={saveBatch} disabled={!batchData.name?.trim() || batchSaving} className="rounded-md bg-leaf px-4 py-1.5 text-sm text-white disabled:opacity-40">{batchSaving ? '建立中...' : '建立批次'}</button>
+              <button type="button" onClick={() => setBatchOpen(false)} className="text-sm text-slate-400">取消</button>
+            </div>
+          </div>
+        )}
         {(batches.loading || costs.loading) && <p className="text-sm text-slate-400">載入中...</p>}
         {!batches.loading && !costs.loading && (
           <div className="space-y-4">
