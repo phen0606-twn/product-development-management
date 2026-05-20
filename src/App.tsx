@@ -47,7 +47,11 @@ const statusOptions = [
 ] as const;
 
 const stageOptions = ['提案', '報價中', '打樣', '修改', '確認樣', '下單', '大貨中', '生產', '驗貨', '出貨', '上架'];
-const costTypes = ['打樣費', '模具費', '運費', '關稅', '設計費', '訂金', '尾款', '手續費', '其他'];
+const costTypes: [string, string][] = [
+  ['sample_fee', '打樣費'], ['mold_fee', '模具費'], ['shipping_fee', '運費'],
+  ['duty_fee', '關稅'], ['design_fee', '設計費'], ['deposit', '訂金'],
+  ['final_payment', '尾款'], ['bank_fee', '手續費'], ['other', '其他'],
+];
 
 export default function App() {
   const [ready, setReady] = useState(!hasSupabaseConfig);
@@ -1163,7 +1167,7 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
         <label className="text-sm">費用類型
           <select value={data.type ?? ''} onChange={(e) => setData({ ...data, type: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2">
             <option value="">請選擇</option>
-            {costTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+            {costTypes.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
           </select>
         </label>
 
@@ -2449,7 +2453,8 @@ function dueDateStatus(dateStr: string | null | undefined): 'overdue' | 'soon' |
 function costTypeLabel(type: string) {
   const map: Record<string, string> = {
     deposit: '訂金', final_payment: '尾款', shipping_fee: '運費',
-    duty_fee: '關稅', sample_fee: '打樣費', other: '其他',
+    duty_fee: '關稅', sample_fee: '打樣費', mold_fee: '模具費',
+    design_fee: '設計費', bank_fee: '手續費', other: '其他',
   };
   return map[type] ?? type;
 }
