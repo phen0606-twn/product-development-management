@@ -1144,7 +1144,11 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
         <label className="text-sm">採購批次
           <select value={data.batch_id ?? ''} onChange={(e) => setData({ ...data, batch_id: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2">
             <option value="">請選擇</option>
-            {batches.map((b) => <option key={b.id} value={b.id}>{b.name || b.batch_no}</option>)}
+            {batches.map((b) => {
+                const prod = products.find((p) => p.id === b.product_id);
+                const prodLabel = prod ? `${prod.sku ? prod.sku + ' ' : ''}${prod.name}` : '';
+                return <option key={b.id} value={b.id}>{prodLabel ? `${prodLabel}｜` : ''}{b.name || b.batch_no}</option>;
+              })}
           </select>
         </label>
 
