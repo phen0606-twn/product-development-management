@@ -885,7 +885,6 @@ function CostsPage() {
       bank_fee_twd: parseNumber(data.bank_fee_twd),
       paid_at: data.paid_at || null,
       due_date: data.due_date || null,
-      payment_status: data.payment_status || 'unpaid',
       notes: data.notes,
     });
     const { error } = editing?.id
