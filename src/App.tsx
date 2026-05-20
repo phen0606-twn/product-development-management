@@ -1050,14 +1050,94 @@ function ProgressForm({ row, onSave, onCancel }: { row: Row | null; onSave: (dat
 }
 
 function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | null; products: Row[]; batches: Row[]; onSave: (data: Row) => void; onCancel: () => void }) {
-  return <DataForm title={row ? '重新編輯費用' : '新增費用'} row={row} onSave={onSave} onCancel={onCancel} fields={[
-    ['product_id', '商品', 'select', products.map((p) => [p.id, `${p.sku || ''} ${p.name}`])],
-    ['batch_id', '採購批次', 'select', batches.map((b) => [b.id, b.name || b.batch_no])],
-    ['type', '費用類型', 'select', costTypes.map((t) => [t, t])],
-    ['custom_type', '其他類型'], ['description', '說明'], ['currency', '幣別', 'select', [['TWD', '台幣'], ['USD', '美金'], ['CNY', '人民幣']]],
-    ['amount', '金額', 'number'], ['exchange_rate_to_twd', '匯率', 'number'], ['bank_fee_twd', '手續費台幣', 'number'],
-    ['paid_amount', '已付款金額', 'number'], ['paid_at', '付款日', 'date'], ['due_date', '到期日', 'date'], ['notes', '備註', 'textarea'],
-  ]} />;
+  const [data, setData] = useState<Row>(row ?? {});
+  const [addingProduct, setAddingProduct] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductSku, setNewProductSku] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function createProduct() {
+    if (!newProductName.trim() || !supabase) return;
+    setSaving(true);
+    const { data: created } = await supabase.from('products').insert({ name: newProductName.trim(), sku: newProductSku.trim() || null }).select().single();
+    if (created) {
+      setData({ ...data, product_id: created.id });
+      setAddingProduct(false);
+      setNewProductName('');
+      setNewProductSku('');
+    }
+    setSaving(false);
+  }
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(data); }} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+      <h3 className="mb-4 font-semibold">{row ? '重新編輯費用' : '新增費用'}</h3>
+      <div className="grid gap-4 md:grid-cols-3">
+        {/* 商品選擇 + 新增商品 */}
+        <label className="text-sm">商品
+          <div className="mt-1 flex gap-2">
+            <select value={data.product_id ?? ''} onChange={(e) => setData({ ...data, product_id: e.target.value })} className="flex-1 rounded-md border px-3 py-2">
+              <option value="">請選擇</option>
+              {products.map((p) => <option key={p.id} value={p.id}>{p.sku ? `${p.sku} ` : ''}{p.name}</option>)}
+            </select>
+            <button type="button" onClick={() => setAddingProduct(!addingProduct)} className="rounded-md border border-leaf px-2 text-leaf text-sm hover:bg-leaf hover:text-white">＋</button>
+          </div>
+          {addingProduct && (
+            <div className="mt-2 rounded-md border border-leaf/30 bg-green-50 p-3 space-y-2">
+              <p className="text-xs font-medium text-leaf">新增商品</p>
+              <input placeholder="商品名稱（必填）" value={newProductName} onChange={(e) => setNewProductName(e.target.value)} className="w-full rounded border px-2 py-1 text-sm" />
+              <input placeholder="貨號（選填）" value={newProductSku} onChange={(e) => setNewProductSku(e.target.value)} className="w-full rounded border px-2 py-1 text-sm" />
+              <div className="flex gap-2">
+                <button type="button" onClick={createProduct} disabled={!newProductName.trim() || saving} className="rounded bg-leaf px-3 py-1 text-xs text-white disabled:opacity-40">{saving ? '建立中...' : '建立並選取'}</button>
+                <button type="button" onClick={() => setAddingProduct(false)} className="text-xs text-slate-400">取消</button>
+              </div>
+            </div>
+          )}
+        </label>
+
+        {/* 採購批次 */}
+        <label className="text-sm">採購批次
+          <select value={data.batch_id ?? ''} onChange={(e) => setData({ ...data, batch_id: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2">
+            <option value="">請選擇</option>
+            {batches.map((b) => <option key={b.id} value={b.id}>{b.name || b.batch_no}</option>)}
+          </select>
+        </label>
+
+        {/* 費用類型 */}
+        <label className="text-sm">費用類型
+          <select value={data.type ?? ''} onChange={(e) => setData({ ...data, type: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2">
+            <option value="">請選擇</option>
+            {costTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </label>
+
+        {[['custom_type', '其他類型'], ['description', '說明']].map(([key, label]) => (
+          <label key={key} className="text-sm">{label}<input value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
+        ))}
+
+        {/* 幣別 */}
+        <label className="text-sm">幣別
+          <select value={data.currency ?? 'TWD'} onChange={(e) => setData({ ...data, currency: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2">
+            {[['TWD', '台幣'], ['USD', '美金'], ['CNY', '人民幣']].map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+          </select>
+        </label>
+
+        {[['amount', '金額'], ['exchange_rate_to_twd', '匯率'], ['bank_fee_twd', '手續費台幣'], ['paid_amount', '已付款金額']].map(([key, label]) => (
+          <label key={key} className="text-sm">{label}<input type="number" value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
+        ))}
+
+        {[['paid_at', '付款日'], ['due_date', '到期日']].map(([key, label]) => (
+          <label key={key} className="text-sm">{label}<input type="date" value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
+        ))}
+
+        <label className="text-sm md:col-span-3">備註<textarea value={data.notes ?? ''} onChange={(e) => setData({ ...data, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" rows={2} /></label>
+      </div>
+      <div className="mt-4 flex gap-2">
+        <button className="rounded-md bg-leaf px-4 py-2 text-sm text-white">儲存</button>
+        <button type="button" onClick={onCancel} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
+      </div>
+    </form>
+  );
 }
 
 function DataForm({ title, row, fields, onSave, onCancel }: { title: string; row: Row | null; fields: any[]; onSave: (data: Row) => void; onCancel: () => void }) {
