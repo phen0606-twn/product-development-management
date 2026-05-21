@@ -478,10 +478,11 @@ function ProductDetailPage() {
   const batches = useRows('product_batches', 'ordered_at');
   const product = products.rows.find((p) => p.id === id);
   const productProgress = mergeProgressRows(id, progress.rows, events.rows).sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)));
-  const productCosts = costs.rows.filter((c) => c.product_id === id);
   const productBatches = batches.rows
     .filter((b) => b.product_id === id)
     .sort((a, b) => String(a.ordered_at || '').localeCompare(String(b.ordered_at || '')));
+  const productBatchIds = new Set(productBatches.map((b) => b.id));
+  const productCosts = costs.rows.filter((c) => c.product_id === id || (c.batch_id && productBatchIds.has(c.batch_id)));
   const costsByBatch = productCosts.reduce<Record<string, Row[]>>((acc, c) => {
     const key = c.batch_id ?? '__none__';
     acc[key] = acc[key] ?? [];
