@@ -1380,10 +1380,15 @@ function ChannelAnalysisPage() {
   }, [selectedMonth]);
 
   const topByChannel = useMemo(
-    () => CHANNELS.map((ch) => ({
-      channel: ch,
-      products: rank(group(monthRows.filter((r) => r.channel_category === ch), (r) => String(r.external_product_name || r.external_sku || '未知'))).slice(0, 3),
-    })),
+    () => CHANNELS.map((ch) => {
+      const chRows = monthRows.filter((r) => r.channel_category === ch);
+      const storeCount = new Set(chRows.map((r) => String(r.store_name || ''))).size;
+      return {
+        channel: ch,
+        storeCount,
+        products: rank(group(chRows, (r) => String(r.external_product_name || r.external_sku || '未知'))).slice(0, 3),
+      };
+    }),
     [monthRows],
   );
 
@@ -1488,9 +1493,9 @@ function ChannelAnalysisPage() {
       <section>
         <h3 className="mb-3 font-semibold">各通路商品前三名</h3>
         <div className="grid gap-4 md:grid-cols-3">
-          {topByChannel.map(({ channel, products }) => (
+          {topByChannel.map(({ channel, storeCount, products }) => (
             <div key={channel} className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
-              <p className="mb-3 font-semibold text-leaf">{channel}</p>
+              <p className="mb-3 font-semibold text-leaf">{channel}{storeCount > 0 && <span className="ml-1.5 text-sm font-normal text-slate-400">／{storeCount} 間</span>}</p>
               {products.length === 0
                 ? <p className="text-sm text-slate-400">無資料</p>
                 : products.map((p) => (
