@@ -1495,7 +1495,7 @@ function ChannelAnalysisPage() {
         <div className="grid gap-4 md:grid-cols-3">
           {topByChannel.map(({ channel, storeCount, products }) => (
             <div key={channel} className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
-              <p className="mb-3 font-semibold text-leaf">{channel}{storeCount > 0 && <span className="ml-1.5 text-sm font-normal text-slate-400">／{storeCount} 間</span>}</p>
+              <p className="mb-3 font-semibold text-leaf">{channel}{storeCount > 0 && channel !== '網路官網／平台' && <span className="ml-1.5 text-sm font-normal text-slate-400">／{storeCount} 間</span>}</p>
               {products.length === 0
                 ? <p className="text-sm text-slate-400">無資料</p>
                 : products.map((p) => (
