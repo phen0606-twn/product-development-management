@@ -43,6 +43,7 @@ const statusOptions = [
   ['mass_production', '大貨中'],
   ['delayed', '延遲'],
   ['launched', '已上架'],
+  ['completed', '完成'],
   ['cancelled', '取消'],
 ] as const;
 
