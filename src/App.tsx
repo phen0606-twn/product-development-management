@@ -397,6 +397,12 @@ function ProductsPage() {
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [filterVendor, setFilterVendor] = useState('');
+
+  const filteredProducts = useMemo(() =>
+    filterVendor ? products.rows.filter((p) => p.vendor_id === filterVendor) : products.rows,
+    [products.rows, filterVendor],
+  );
 
   async function save(data: Row) {
     const payload = clean({
@@ -446,13 +452,23 @@ function ProductsPage() {
 
   return (
     <Page title="商品管理" subtitle="建立商品、編輯商品、查看詳情與進度">
-      <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增商品" />
+      <div className="flex flex-wrap items-end gap-3">
+        <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增商品" />
+        <label className="text-sm">
+          <span className="mb-1 block text-slate-500">篩選廠商</span>
+          <select value={filterVendor} onChange={(e) => setFilterVendor(e.target.value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm">
+            <option value="">全部廠商</option>
+            {vendors.rows.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
+        </label>
+        {filterVendor && <p className="self-end pb-2 text-sm text-slate-500">共 {filteredProducts.length} 件商品</p>}
+      </div>
       {message && <Notice tone="error">{message}</Notice>}
       {products.error && <Notice tone="error">商品資料讀取失敗：{products.error}</Notice>}
       {(progress.error || events.error) && <Notice tone="error">進度資料讀取失敗：{progress.error || events.error}</Notice>}
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
       <Table columns={['SKU', '商品名稱', '分類', '狀態', '最近進度', '廠商', '操作']}>
-        {products.loading ? <LoadingRow /> : products.rows.map((row) => (
+        {products.loading ? <LoadingRow /> : filteredProducts.map((row) => (
           <tr key={row.id} className="border-t align-top">
             <td className="p-3">{row.sku}</td>
             <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link><p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p></td>
