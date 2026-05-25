@@ -2449,24 +2449,40 @@ function StatusSummary({ rows }: { rows: Array<{ label: string; products: Row[] 
 
 function SalesRecordsTable({ records }: { records: Row[] }) {
   const [showAll, setShowAll] = useState(false);
-  const visible = showAll ? records : records.slice(0, 10);
+  // Aggregate by SKU across all weeks in the range
+  const aggregated = useMemo(() => {
+    const map = new Map<string, { label: string; quantity: number; revenue: number }>();
+    for (const r of records) {
+      const key = String(r.external_sku || r.external_product_name || '');
+      if (!key) continue;
+      const existing = map.get(key) ?? { label: salesProductLabel(r), quantity: 0, revenue: 0 };
+      existing.quantity += Number(r.quantity ?? 0);
+      existing.revenue += Number(r.revenue ?? 0);
+      map.set(key, existing);
+    }
+    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
+  }, [records]);
+  const visible = showAll ? aggregated : aggregated.slice(0, 10);
   return (
     <div className="mt-6">
-      <Table columns={['日期', '商品', '通路', '數量', '業績金額']}>
-        {visible.map((r) => (
-          <tr key={r.id} className="border-t">
-            <td className="p-3">{formatFullDate(r.sold_at)}</td>
-            <td className="p-3">{salesProductLabel(r)}</td>
-            <td className="p-3">{r.channel}</td>
-            <td className="p-3">{r.quantity}</td>
-            <td className="p-3">{formatCurrency(r.revenue)}</td>
-          </tr>
-        ))}
+      <p className="mb-2 text-sm font-medium text-slate-600">銷售明細（區間加總，共 {aggregated.length} 個品項）</p>
+      <Table columns={['商品', '數量', '業績金額', '佔比']}>
+        {visible.map((r, i) => {
+          const totalRev = aggregated.reduce((s, x) => s + x.revenue, 0);
+          return (
+            <tr key={i} className="border-t">
+              <td className="p-3">{r.label}</td>
+              <td className="p-3">{r.quantity > 0 ? r.quantity.toLocaleString('zh-TW') : '-'}</td>
+              <td className="p-3 font-semibold">{formatCurrency(r.revenue)}</td>
+              <td className="p-3 text-slate-500">{totalRev ? (r.revenue / totalRev * 100).toFixed(1) : '0.0'}%</td>
+            </tr>
+          );
+        })}
       </Table>
-      {records.length > 10 && (
+      {aggregated.length > 10 && (
         <button type="button" onClick={() => setShowAll(!showAll)}
           className="mt-2 w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
-          {showAll ? '收起' : `展開全部（共 ${records.length} 筆）`}
+          {showAll ? '收起' : `展開全部（共 ${aggregated.length} 個品項）`}
         </button>
       )}
     </div>
