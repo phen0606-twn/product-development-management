@@ -1276,7 +1276,7 @@ function SalesPage() {
   const channelSales = useRows('channel_sales_records');
   const stores = useRows('channel_store_sales_records');
   const [start, setStart] = useState(`${new Date().toISOString().slice(0, 7)}-01`);
-  const [end, setEnd] = useState(new Date().toISOString().slice(0, 10));
+  const [end, setEnd] = useState(monthEnd(new Date().toISOString().slice(0, 7)));
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
   const availableMonths = useMemo(() => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(), [sales.rows]);
