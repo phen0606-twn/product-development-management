@@ -1305,6 +1305,7 @@ function SalesPage() {
   const channelRows = channelData(channelSales.rows, records, months);
   const street = rank(group(stores.rows.filter((r) => r.channel_category === '街邊店' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
   const mrt = rank(group(stores.rows.filter((r) => r.channel_category === '捷運門市' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
+  const franchise = rank(group(stores.rows.filter((r) => r.channel_category === '加盟門市' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
   return (
     <Page title="業績追蹤" subtitle="依日期區間查看業績、目標、MOM、YOY 與排行">
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
@@ -1329,13 +1330,13 @@ function SalesPage() {
         <div className="grid gap-3 md:grid-cols-2"><Card label="MOM" value={growth(revenue, prevMonth)} helper={`前月 ${formatCurrency(prevMonth)}`} compact /><Card label="YOY" value={growth(revenue, prevYear)} helper={`去年同期 ${formatCurrency(prevYear)}`} compact /></div>
       </div>
       <section className="grid gap-6 xl:grid-cols-2"><Summary title="商品業績排行" rows={productRows} /><ChannelSummary rows={channelRows} /></section>
-      <section className="mt-6 grid gap-6 xl:grid-cols-2"><Summary title="街邊店前五名" rows={street} /><Summary title="捷運門市前五名" rows={mrt} /></section>
+      <section className="mt-6 grid gap-6 xl:grid-cols-3"><Summary title="街邊店前五名" rows={street} /><Summary title="捷運門市前五名" rows={mrt} /><Summary title="加盟門市前五名" rows={franchise} /></section>
       <SalesRecordsTable records={records} />
     </Page>
   );
 }
 
-const CHANNELS = ['網路官網／平台', '街邊店', '捷運門市'] as const;
+const CHANNELS = ['網路官網／平台', '街邊店', '捷運門市', '加盟門市'] as const;
 
 function ChannelAnalysisPage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -2674,6 +2675,7 @@ function isStoreName(label: string) {
 function classifyStore(label: string) {
   if (/^000|^E\d{3}|網路|平台|MOMO|大紅哥|團購|暫存倉/.test(label)) return '網路官網／平台';
   if (/捷運|M6/.test(label)) return '捷運門市';
+  if (/高雄|台南|台中|新竹|宜蘭/.test(label)) return '加盟門市';
   return '街邊店';
 }
 
