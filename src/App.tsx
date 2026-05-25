@@ -2214,15 +2214,23 @@ function ImportPage() {
   async function doInvImport() {
     if (!supabase || invRows.length === 0) return;
     setInvImporting(true);
-    // Delete ALL inventory records so stale imports from other dates don't contaminate results
-    const { error: delErr } = await supabase.from('inventory_records').delete().gte('recorded_at', '2000-01-01');
-    if (delErr) { setInvMsg(`刪除失敗：${delErr.message}`); setInvImporting(false); return; }
+    // Delete only same date + same SKU records (preserves other dates and other SKUs on same date)
+    const skus = [...new Set(invRows.map((r) => String(r.external_sku || '')).filter(Boolean))];
+    for (let i = 0; i < skus.length; i += 100) {
+      const chunk = skus.slice(i, i + 100);
+      const { error: delErr } = await supabase
+        .from('inventory_records')
+        .delete()
+        .eq('recorded_at', recordDate)
+        .in('external_sku', chunk);
+      if (delErr) { setInvMsg(`刪除失敗：${delErr.message}`); setInvImporting(false); return; }
+    }
     const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
     for (let i = 0; i < rowsWithDate.length; i += 500) {
       const { error } = await supabase.from('inventory_records').insert(rowsWithDate.slice(i, i + 500));
       if (error) { setInvMsg(`匯入失敗：${error.message}`); setInvImporting(false); return; }
     }
-    setInvMsg(`✓ 已清除舊庫存，匯入 ${recordDate} 共 ${invRows.length} 筆（${new Set(invRows.map((r) => r.external_sku)).size} 個 SKU）。`);
+    setInvMsg(`✓ 已匯入 ${recordDate} 共 ${invRows.length} 筆（${skus.length} 個 SKU），同日同貨號舊資料已覆蓋。`);
     setInvRows([]);
     setInvImporting(false);
   }
@@ -2285,7 +2293,7 @@ function ImportPage() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm text-slate-500">{invFile}｜盤點日期 {recordDate}｜{new Set(invRows.map((r) => r.external_sku)).size} 個 SKU｜{invRows.length.toLocaleString('zh-TW')} 筆</p>
-                <p className="mt-1 text-xs text-amber-600">⚠ 確認後 {recordDate} 舊庫存將全部覆蓋</p>
+                <p className="mt-1 text-xs text-amber-600">⚠ 同日期同貨號的舊資料將覆蓋，其他日期與其他貨號不受影響</p>
               </div>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setInvRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
