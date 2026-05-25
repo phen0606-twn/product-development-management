@@ -47,7 +47,7 @@ const statusOptions = [
   ['cancelled', '取消'],
 ] as const;
 
-const stageOptions = ['提案', '報價中', '打樣', '修改', '確認樣', '下單', '大貨中', '生產', '驗貨', '出貨', '上架'];
+const stageOptions = ['提案', '報價中', '打樣', '修改', '確認樣', '下單', '大貨中', '生產', '驗貨', '出貨', '上架', '完成'];
 const costTypes: [string, string][] = [
   ['sample_fee', '打樣費'], ['mold_fee', '模具費'], ['shipping_fee', '運費'],
   ['duty_fee', '關稅'], ['design_fee', '設計費'], ['deposit', '訂金'],
