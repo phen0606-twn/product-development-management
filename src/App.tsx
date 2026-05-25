@@ -1349,6 +1349,8 @@ function ChannelAnalysisPage() {
   const [productKeyword, setProductKeyword] = useState('');
   const [productStoreRows, setProductStoreRows] = useState<Row[] | null>(null);
   const [productSearching, setProductSearching] = useState(false);
+  const [crossStart, setCrossStart] = useState('');
+  const [crossEnd, setCrossEnd] = useState('');
 
   const monthShortcuts = useMemo(() => {
     const merged = [...recentMonths, ...availableMonths];
@@ -1422,11 +1424,14 @@ function ChannelAnalysisPage() {
     setProductSearching(true);
     setProductStoreRows(null);
     const kw = productKeyword.trim();
-    const { data } = await supabase
+    let query = supabase
       .from('product_store_sales')
-      .select('channel_category,store_name,quantity,revenue')
+      .select('channel_category,store_name,quantity,revenue,sales_month')
       .ilike('external_product_name', `%${kw}%`)
       .limit(10000);
+    if (crossStart) query = query.gte('sales_month', crossStart);
+    if (crossEnd) query = query.lte('sales_month', crossEnd);
+    const { data } = await query;
     setProductStoreRows(data ?? []);
     setProductSearching(false);
   }
@@ -1458,21 +1463,29 @@ function ChannelAnalysisPage() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <h3 className="mb-1 font-semibold">商品跨規格門市查詢</h3>
-        <p className="mb-4 text-xs text-slate-400">輸入商品名稱關鍵字，自動彙總所有符合的 SKU（不分尺寸／顏色），顯示各門市歷史累計銷售排行</p>
-        <div className="flex gap-2">
+        <p className="mb-4 text-xs text-slate-400">輸入商品名稱關鍵字，自動彙總所有符合的 SKU（不分尺寸／顏色），顯示各門市銷售排行</p>
+        <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
           <input
             type="text"
             value={productKeyword}
             onChange={(e) => setProductKeyword(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && searchProductStores()}
             placeholder="例：防曬帽、涼感上衣..."
-            className="flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-leaf"
+            className="rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-leaf"
           />
+          <label className="text-sm">
+            <span className="text-slate-500 text-xs block mb-1">起日</span>
+            <input type="date" value={crossStart} onChange={(e) => setCrossStart(e.target.value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          </label>
+          <label className="text-sm">
+            <span className="text-slate-500 text-xs block mb-1">迄日</span>
+            <input type="date" value={crossEnd} onChange={(e) => setCrossEnd(e.target.value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          </label>
           <button
             type="button"
             onClick={searchProductStores}
             disabled={productKeyword.trim().length < 2 || productSearching}
-            className="rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-40"
+            className="self-end rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-40"
           >
             {productSearching ? '查詢中...' : '查詢'}
           </button>
@@ -1483,7 +1496,7 @@ function ChannelAnalysisPage() {
             {productStoreRanking.length === 0
               ? <p className="text-sm text-slate-400">找不到符合「{productKeyword}」的銷售記錄</p>
               : <>
-                  <p className="mb-3 text-xs text-slate-400">共找到 {productStoreRanking.length} 間門市的銷售資料（歷史累計）</p>
+                  <p className="mb-3 text-xs text-slate-400">共找到 {productStoreRanking.length} 間門市的銷售資料{crossStart || crossEnd ? `（${crossStart || '最早'} ～ ${crossEnd || '最新'}）` : '（全期累計）'}</p>
                   <div className="space-y-2">
                     {productStoreRanking.map((s) => (
                       <div key={s.label} className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 rounded-md border border-slate-100 p-3 text-sm">
