@@ -1341,6 +1341,7 @@ const CHANNELS = ['網路官網／平台', '街邊店', '捷運門市', '加盟�
 function ChannelAnalysisPage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [selectedSku, setSelectedSku] = useState('');
+  const [storeSearchKw, setStoreSearchKw] = useState('');
   const [monthRows, setMonthRows] = useState<Row[]>([]);
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [recentMonths, setRecentMonths] = useState<string[]>(() => readRecentMonths());
@@ -1406,6 +1407,15 @@ function ChannelAnalysisPage() {
     const rows = monthRows.filter((r) => String(r.external_sku || '') === selectedSku);
     return rank(group(rows, (r) => `[${r.channel_category}] ${r.store_name}`)).slice(0, 10);
   }, [monthRows, selectedSku]);
+
+  const storeSearchResults = useMemo(() => {
+    const kw = storeSearchKw.trim();
+    if (!kw) return null;
+    const rows = monthRows.filter((r) =>
+      String(r.external_product_name || '').includes(kw) || String(r.external_sku || '').includes(kw)
+    );
+    return rank(group(rows, (r) => `[${r.channel_category}] ${r.store_name}`)).slice(0, 15);
+  }, [monthRows, storeSearchKw]);
 
   async function searchProductStores() {
     if (!supabase || productKeyword.trim().length < 2) return;
@@ -1514,25 +1524,31 @@ function ChannelAnalysisPage() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-        <h3 className="mb-4 font-semibold">各商品門市銷售排行</h3>
-        <label className="block text-sm">選擇商品 SKU
-          <select value={selectedSku} onChange={(e) => setSelectedSku(e.target.value)} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2">
-            <option value="">-- 請選擇商品 --</option>
-            {skuOptions.map(([sku, name]) => <option key={sku} value={sku}>{sku}　{name}</option>)}
-          </select>
-        </label>
-        {selectedSku && (
+        <h3 className="mb-1 font-semibold">各商品門市銷售排行</h3>
+        <p className="mb-4 text-xs text-slate-400">輸入品名或貨號關鍵字，自動彙總符合商品的各門市銷售排行（當月資料）</p>
+        <input
+          type="text"
+          value={storeSearchKw}
+          onChange={(e) => setStoreSearchKw(e.target.value)}
+          placeholder="例：墨鏡、AS1SG..."
+          className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-leaf"
+        />
+        {storeSearchResults !== null && (
           <div className="mt-4 space-y-2">
-            {topStores.length === 0
-              ? <p className="text-sm text-slate-400">此商品無門市資料</p>
-              : topStores.map((s) => (
-                <div key={s.label} className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 rounded-md border border-slate-100 p-3 text-sm">
-                  <span className={`text-xl font-bold ${s.rank <= 3 ? 'text-coral' : 'text-slate-300'}`}>{s.rank}</span>
-                  <p className="break-words">{s.label}</p>
-                  <p className="text-slate-500">{s.quantity.toLocaleString('zh-TW')} 件</p>
-                  <p className="font-semibold text-leaf">{formatCurrency(s.revenue)}</p>
-                </div>
-              ))}
+            {storeSearchResults.length === 0
+              ? <p className="text-sm text-slate-400">找不到符合「{storeSearchKw}」的當月銷售資料</p>
+              : <>
+                  <p className="text-xs text-slate-400">共 {storeSearchResults.length} 間門市有銷售紀錄</p>
+                  {storeSearchResults.map((s) => (
+                    <div key={s.label} className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 rounded-md border border-slate-100 p-3 text-sm">
+                      <span className={`text-xl font-bold ${s.rank <= 3 ? 'text-coral' : 'text-slate-300'}`}>{s.rank}</span>
+                      <p className="break-words">{s.label}</p>
+                      <p className="text-slate-500">{s.quantity.toLocaleString('zh-TW')} 件</p>
+                      <p className="font-semibold text-leaf">{formatCurrency(s.revenue)}</p>
+                    </div>
+                  ))}
+                </>
+            }
           </div>
         )}
       </section>
