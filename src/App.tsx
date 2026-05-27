@@ -1318,6 +1318,26 @@ function SalesPage() {
   const annualSales = sum(sales.rows.filter((r) => String(r.sold_at).startsWith(start.slice(0, 4))), 'revenue');
   const prevMonth = sumSales(sales.rows, shiftMonth(start, -1), shiftMonth(end, -1));
   const prevYear = sumSales(sales.rows, shiftYear(start, -1), shiftYear(end, -1));
+  const [productSearchKw, setProductSearchKw] = useState('');
+  const productSearchResults = useMemo(() => {
+    const kw = productSearchKw.trim();
+    if (kw.length < 2) return null;
+    const matched = records.filter((r) =>
+      String(r.external_product_name || '').includes(kw) || String(r.external_sku || '').includes(kw)
+    );
+    if (matched.length === 0) return { total: { qty: 0, revenue: 0 }, skus: [] };
+    const skuMap = new Map<string, { label: string; qty: number; revenue: number }>();
+    for (const r of matched) {
+      const key = String(r.external_sku || r.external_product_name || '');
+      const entry = skuMap.get(key) ?? { label: salesProductLabel(r), qty: 0, revenue: 0 };
+      entry.qty += Number(r.quantity ?? 0);
+      entry.revenue += Number(r.revenue ?? 0);
+      skuMap.set(key, entry);
+    }
+    const skus = [...skuMap.values()].sort((a, b) => b.revenue - a.revenue);
+    const total = { qty: skus.reduce((s, x) => s + x.qty, 0), revenue: skus.reduce((s, x) => s + x.revenue, 0) };
+    return { total, skus };
+  }, [records, productSearchKw]);
   const productRows = rank(group(records, salesProductLabel)).slice(0, 10);
   const channelRows = channelData(channelSales.rows, records, months);
   const street = rank(group(stores.rows.filter((r) => r.channel_category === '街邊店' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
@@ -1340,6 +1360,40 @@ function SalesPage() {
             </button>
           ))}
         </div>
+      </section>
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-1 font-semibold text-sm">商品業績查詢</h3>
+        <p className="mb-3 text-xs text-slate-400">輸入品名或貨號關鍵字（2字以上），查詢上方選定區間內不分尺寸／顏色的業績合計</p>
+        <input
+          type="text"
+          value={productSearchKw}
+          onChange={(e) => setProductSearchKw(e.target.value)}
+          placeholder="例：涼感衣、AS1SG..."
+          className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-leaf"
+        />
+        {productSearchResults !== null && (
+          <div className="mt-4">
+            {productSearchResults.skus.length === 0
+              ? <p className="text-sm text-slate-400">區間內找不到「{productSearchKw}」的銷售紀錄</p>
+              : <>
+                  <div className="mb-3 flex gap-6 rounded-lg bg-slate-50 px-4 py-3">
+                    <div><p className="text-xs text-slate-500">區間總業績</p><p className="text-lg font-bold text-leaf">{formatCurrency(productSearchResults.total.revenue)}</p></div>
+                    <div><p className="text-xs text-slate-500">區間總數量</p><p className="text-lg font-bold text-ink">{productSearchResults.total.qty.toLocaleString('zh-TW')} 件</p></div>
+                    <div><p className="text-xs text-slate-500">符合規格數</p><p className="text-lg font-bold text-ink">{productSearchResults.skus.length} 個</p></div>
+                  </div>
+                  <div className="space-y-1.5">
+                    {productSearchResults.skus.map((s, i) => (
+                      <div key={i} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-md border border-slate-100 px-3 py-2 text-sm">
+                        <p className="break-words text-slate-700">{s.label}</p>
+                        <p className="text-slate-500">{s.qty > 0 ? `${s.qty.toLocaleString('zh-TW')} 件` : '-'}</p>
+                        <p className="font-semibold text-leaf">{formatCurrency(s.revenue)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+            }
+          </div>
+        )}
       </section>
       <div className="mb-6 space-y-3">
         <div className="grid gap-3 md:grid-cols-3"><Card label="區間業績" value={formatCurrency(revenue)} compact /><Card label="區間銷售數量" value={qty.toLocaleString('zh-TW')} compact /><Card label="平均單價" value={formatCurrency(qty ? revenue / qty : 0)} compact /></div>
