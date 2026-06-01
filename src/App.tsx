@@ -2763,11 +2763,13 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
     // Skip zero-revenue rows in the old format (no category rows); in the new format SKU rows
     // may have null revenue when sales data only appears on child store rows — still track them.
     if (!hasCategoryRows && !quantity && !revenue) continue;
-    const sku = (label.split(/\s+/)[0] || '').toUpperCase();
+    const skuParts = label.split(/\s+/);
+    const sku = (skuParts[0] || '').toUpperCase();
+    const productName = (sku + ' ' + skuParts.slice(1).join(' ')).trim();
     currentProduct = {
       product_id: null,
       external_sku: sku,
-      external_product_name: label,
+      external_product_name: productName,
       sold_at: soldAt,
       quantity,
       revenue,
