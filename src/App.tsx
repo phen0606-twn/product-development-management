@@ -2230,7 +2230,7 @@ function parseInventoryExcel(data: unknown[][]): Row[] {
     const qty = Number(row[1] ?? 0);
     if (!label || label === '商品') continue;
     const firstWord = label.split(/\s+/)[0] ?? '';
-    if (/^[A-Z]{2,}\d/.test(firstWord)) {
+    if (/^[A-Za-z]{2,}\d/.test(firstWord)) {
       flush();
       currentSku = firstWord;
       currentName = label.slice(firstWord.length).trim();
@@ -2759,7 +2759,7 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
     // Skip product-line category summary rows (e.g. "石墨烯發熱衣BigRed", "PRO折疊套鏡")
     // These appear in the new format and are summaries of the SKU rows that follow them.
     // SKU rows always start with a 2-uppercase-letter + digit product code (e.g. AH1..., AS1...).
-    if (hasCategoryRows && !/^[A-Z]{2}\d/.test(label.split(/\s+/)[0] || '')) continue;
+    if (hasCategoryRows && !/^[A-Za-z]{2}\d/.test(label.split(/\s+/)[0] || '')) continue;
     // Skip zero-revenue rows in the old format (no category rows); in the new format SKU rows
     // may have null revenue when sales data only appears on child store rows — still track them.
     if (!hasCategoryRows && !quantity && !revenue) continue;
