@@ -2232,7 +2232,7 @@ function parseInventoryExcel(data: unknown[][]): Row[] {
     const firstWord = label.split(/\s+/)[0] ?? '';
     if (/^[A-Za-z]{2,}\d/.test(firstWord)) {
       flush();
-      currentSku = firstWord;
+      currentSku = firstWord.toUpperCase();
       currentName = label.slice(firstWord.length).trim();
       currentSkuQty = qty;
     } else if (currentSku && qty !== 0 && /^\d{4,6}$|^[A-Z]\d{3}|^0ZZZZ/.test(firstWord)) {
@@ -2763,7 +2763,7 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
     // Skip zero-revenue rows in the old format (no category rows); in the new format SKU rows
     // may have null revenue when sales data only appears on child store rows — still track them.
     if (!hasCategoryRows && !quantity && !revenue) continue;
-    const sku = label.split(/\s+/)[0] || '';
+    const sku = (label.split(/\s+/)[0] || '').toUpperCase();
     currentProduct = {
       product_id: null,
       external_sku: sku,
