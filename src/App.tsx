@@ -1684,19 +1684,20 @@ function InventoryPage() {
     localStorage.setItem('salesRecentMonths', JSON.stringify(next));
   }
 
-  // Latest snapshot date per SKU, then sum all locations for that date
+  // Find the single global latest snapshot date, then sum all SKUs on that date only.
+  // Using per-SKU latest dates causes totals to mix multiple snapshot dates
+  // (e.g. old orphaned SKUs + new import = inflated total).
   const latestBySku = useMemo(() => {
-    const latestDate = new Map<string, string>();
+    let globalLatest = '';
     for (const r of inventory.rows) {
-      const sku = String(r.external_sku || '');
       const date = String(r.recorded_at || '').slice(0, 10);
-      if (sku && (!latestDate.has(sku) || date > latestDate.get(sku)!)) latestDate.set(sku, date);
+      if (date > globalLatest) globalLatest = date;
     }
     const totals = new Map<string, { external_sku: string; product_name: string; quantity: number; recorded_at: string }>();
     for (const r of inventory.rows) {
       const sku = String(r.external_sku || '');
       const date = String(r.recorded_at || '').slice(0, 10);
-      if (!sku || date !== latestDate.get(sku)) continue;
+      if (!sku || date !== globalLatest) continue;
       const entry = totals.get(sku) ?? { external_sku: sku, product_name: String(r.product_name || sku), quantity: 0, recorded_at: date };
       entry.quantity += Number(r.quantity ?? 0);
       totals.set(sku, entry);
@@ -1704,18 +1705,17 @@ function InventoryPage() {
     return [...totals.values()];
   }, [inventory.rows]);
 
-  // Per-location breakdown for each SKU (latest snapshot date only)
+  // Per-location breakdown for each SKU (global latest snapshot date only)
   const skuLocations = useMemo(() => {
-    const latestDate = new Map<string, string>();
+    let globalLatest = '';
     for (const r of inventory.rows) {
-      const sku = String(r.external_sku || '');
       const date = String(r.recorded_at || '').slice(0, 10);
-      if (sku && (!latestDate.has(sku) || date > latestDate.get(sku)!)) latestDate.set(sku, date);
+      if (date > globalLatest) globalLatest = date;
     }
     const map = new Map<string, Array<{ location: string; quantity: number }>>();
     for (const r of inventory.rows) {
       const sku = String(r.external_sku || '');
-      if (!sku || String(r.recorded_at || '').slice(0, 10) !== latestDate.get(sku)) continue;
+      if (!sku || String(r.recorded_at || '').slice(0, 10) !== globalLatest) continue;
       const arr = map.get(sku) ?? [];
       arr.push({ location: String(r.location || '未知'), quantity: Number(r.quantity ?? 0) });
       map.set(sku, arr);
