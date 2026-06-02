@@ -10,3 +10,4 @@ outputs *
 dist *
 package-lock *.json
 .vite
+cluade/
