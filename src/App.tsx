@@ -1787,18 +1787,42 @@ function InventoryPage() {
     return map;
   }, [products.rows]);
 
-  const categoryDist = useMemo(() => {
-    const map = new Map<string, number>();
+  const categoryStats = useMemo(() => {
+    const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
+    const last3 = allMonths.slice(-3);
+    // avg monthly sales per SKU over last 3 months
+    const skuAvgSales = new Map<string, number>();
+    for (const r of sales.rows) {
+      const sku = String(r.external_sku || '');
+      const month = String(r.sold_at || '').slice(0, 7);
+      if (!sku || !last3.includes(month)) continue;
+      skuAvgSales.set(sku, (skuAvgSales.get(sku) ?? 0) + Number(r.quantity ?? 0));
+    }
+    for (const [sku, total] of skuAvgSales) skuAvgSales.set(sku, last3.length ? total / last3.length : 0);
+
+    const catMap = new Map<string, { stock: number; value: number; monthlySales: number }>();
     for (const inv of currentBySku) {
       const sku = String(inv.external_sku || '');
       const cat = skuToCategory.get(sku) || '未分類';
-      map.set(cat, (map.get(cat) ?? 0) + Number(inv.quantity ?? 0));
+      const qty = Number(inv.quantity ?? 0);
+      const entry = catMap.get(cat) ?? { stock: 0, value: 0, monthlySales: 0 };
+      entry.stock += qty;
+      entry.value += qty * (skuCostMap.get(sku) ?? 0);
+      entry.monthlySales += skuAvgSales.get(sku) ?? 0;
+      catMap.set(cat, entry);
     }
-    const total = [...map.values()].reduce((s, v) => s + v, 0) || 1;
-    return [...map.entries()]
-      .map(([category, quantity]) => ({ category, quantity, pct: quantity / total * 100 }))
-      .sort((a, b) => b.quantity - a.quantity);
-  }, [currentBySku, skuToCategory]);
+    const totalStock = [...catMap.values()].reduce((s, v) => s + v.stock, 0) || 1;
+    return [...catMap.entries()]
+      .map(([category, v]) => ({
+        category,
+        stock: v.stock,
+        value: v.value,
+        monthlySales: Math.round(v.monthlySales),
+        turnoverDays: v.monthlySales > 0 ? Math.round(v.stock / (v.monthlySales / 30)) : Infinity,
+        pct: v.stock / totalStock * 100,
+      }))
+      .sort((a, b) => b.stock - a.stock);
+  }, [currentBySku, skuToCategory, skuCostMap, sales.rows]);
 
   const maxTotal = useMemo(() => Math.max(...chartData.map((d) => d.total), 1), [chartData]);
   const snapshotTotal = useMemo(() => latestBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [latestBySku]);
@@ -1960,21 +1984,52 @@ function InventoryPage() {
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
       </div>
 
-      {categoryDist.length > 0 && (
+      {categoryStats.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <h3 className="mb-4 font-semibold">分類庫存佔比</h3>
-          <div className="space-y-2.5">
-            {categoryDist.map((c) => (
-              <div key={c.category}>
-                <div className="mb-1 flex items-center justify-between text-xs">
-                  <span className="font-medium text-slate-700">{c.category}</span>
-                  <span className="text-slate-500">共 {c.quantity.toLocaleString('zh-TW')} 件／佔比 <span className="font-semibold text-leaf">{c.pct.toFixed(1)}%</span></span>
-                </div>
-                <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100">
-                  <div style={{ width: `${c.pct}%` }} className="h-full bg-cream transition-all" />
-                </div>
-              </div>
-            ))}
+          <h3 className="mb-1 font-semibold">分類庫存總覽</h3>
+          <p className="mb-4 text-xs text-slate-400">月均銷量與週轉天數以近 3 個月平均計算</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-xs text-slate-400">
+                  <th className="pb-2 text-left font-medium">分類</th>
+                  <th className="pb-2 text-right font-medium">庫存量</th>
+                  <th className="pb-2 text-right font-medium">庫存金額</th>
+                  <th className="pb-2 text-right font-medium">月均銷量</th>
+                  <th className="pb-2 text-right font-medium">週轉天數</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {categoryStats.map((c) => {
+                  const urgent = c.turnoverDays < 60;
+                  const caution = c.turnoverDays >= 60 && c.turnoverDays < 120;
+                  return (
+                    <tr key={c.category} className="group hover:bg-slate-50">
+                      <td className="py-2.5 pr-4">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-slate-700">{c.category}</span>
+                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                            <div style={{ width: `${c.pct}%` }} className="h-full bg-leaf/40 transition-all" />
+                          </div>
+                          <span className="text-xs text-slate-400">{c.pct.toFixed(0)}%</span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-right tabular-nums text-slate-700">{c.stock.toLocaleString('zh-TW')} 件</td>
+                      <td className="py-2.5 text-right tabular-nums text-slate-700">{c.value > 0 ? formatCurrency(c.value) : <span className="text-slate-300">—</span>}</td>
+                      <td className="py-2.5 text-right tabular-nums text-slate-600">{c.monthlySales > 0 ? `${c.monthlySales.toLocaleString('zh-TW')} 件` : <span className="text-slate-300">—</span>}</td>
+                      <td className="py-2.5 text-right">
+                        {c.turnoverDays === Infinity
+                          ? <span className="text-xs text-slate-300">無銷售</span>
+                          : <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${urgent ? 'bg-red-100 text-red-600' : caution ? 'bg-amber-100 text-amber-700' : 'bg-emerald-50 text-emerald-600'}`}>
+                              {c.turnoverDays} 天
+                            </span>
+                        }
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </section>
       )}
