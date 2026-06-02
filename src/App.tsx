@@ -1402,6 +1402,52 @@ function SalesPage() {
 
 const CHANNELS = ['網路官網／平台', '街邊店', '捷運門市', '加盟門市'] as const;
 
+// 貨號前5碼 → 品項名稱（源自貨號分類表.xlsx）
+const SKU_PREFIX_MAP: Record<string, string> = {
+  AB1BA:'飲料袋', AB1BB:'購物袋', AB1BC:'旅行袋', AB1BZ:'其他袋品',
+  AD1DA:'帳篷/野餐墊', AD1DB:'口罩', AD1DC:'夾扇', AD1DI:'杯子', AD1DL:'面罩', AD1DS:'眼鏡', AD1DZ:'日常其他',
+  AG123:'好神包23吋', AG127:'好神包27吋', AG130:'好神包長傘',
+  AH1HA:'保暖手套', AH1HB:'保暖帽子', AH1HC:'發熱衣物', AH1HD:'圍巾', AH1HE:'保暖衣物', AH1HZ:'保暖其他',
+  AO2OZ:'配件其他',
+  AS1SA:'防曬袖套', AS1SB:'遮陽帽', AS1SC:'防曬衣物', AS1SD:'涼感袖套', AS1SE:'涼感其他', AS1SF:'防曬乳', AS1SG:'太陽眼鏡',
+  AU1UA:'傘頂', AU1UB:'傘架', AU1UC:'傘帽',
+  AW1WA:'防水手套', AW1WB:'防水包', AW1WZ:'防水其他',
+  CD1DC:'電器', CD1DD:'行李箱', CD1DE:'電玩', CD1DF:'包包', CD1DG:'鞋類', CD1DH:'衛生棉',
+  CD1DI:'杯子', CD1DJ:'生活用品', CD1DM:'冷水壺', CD1DN:'保溫瓶', CD1DO:'美妝保養', CD1DP:'身體用品', CD1DS:'眼鏡', CD1DZ:'其他',
+  CF1DB:'口罩',
+  CH1SD:'涼感袖套', CH1SE:'涼感其他', CH2HC:'發熱衣物',
+  CN1CT:'茶', CN1GZ:'果汁', CN1LS:'零食', CN1SP:'食品',
+  CS1SC:'防曬衣物', CS1SF:'防曬乳',
+  CS3ST:'踝船型襪', CS3SU:'短襪', CS3SV:'中筒襪',
+  GG2GW:'贈品',
+  HD1DJ:'生活用品', HD1DK:'文具用品', HD1DY:'制服',
+  HP2PA:'物流箱', HP2PB:'膠帶', HP2PC:'包裝貼紙', HP2PD:'物流袋', HP2PE:'包裝工具', HP2PF:'包裝盒', HP2PG:'包裝袋', HP2YF:'運費',
+  HS4SY:'文宣品', HS4SZ:'陳列用品',
+  J3119:'租傘19吋', J3220:'租傘20吋', J3321:'租傘21吋', J3422:'租傘22吋',
+  JO1SY:'文宣品', JO1Z2:'租賃費用', JZ223:'租傘23吋',
+  L2119:'長傘19吋', L2121:'長傘21吋', L2123:'長傘23吋', L2125:'長傘25吋', L2127:'長傘27吋', L2130:'長傘30吋', L2133:'長傘33吋', L2135:'長傘35吋',
+  L2219:'手開長傘19吋', L2221:'手開長傘21吋', L2223:'手開長傘23吋', L2225:'手開長傘25吋', L2227:'手開長傘27吋', L2230:'手開長傘30吋', L2232:'手開長傘32吋', L2233:'手開長傘33吋',
+  L2419:'電動長傘19吋', L2420:'電動長傘20吋', L2421:'電動長傘21吋', L2423:'電動長傘23吋', L2425:'電動長傘25吋', L2427:'電動長傘27吋',
+  MM1MM:'傘骨', MM1MS:'中棒',
+  RC1C1:'連身雨衣', RC1C2:'兩件式雨衣', RC1C3:'風雨衣', RC1C4:'斗篷雨衣', RC1C5:'反穿雨衣', RC1C6:'兒童雨衣',
+  RO1O1:'手套', RO1O2:'背包套', RO1O3:'安全帽套', RO1O4:'機車套', RO1O5:'傘桶',
+  RP1P1:'雨褲', RP1P2:'兩件式雨褲',
+  RS2S1:'雨鞋', RS2S2:'兒童雨鞋', RS2S3:'有底鞋套', RS2S4:'無底鞋套',
+  SA0SM:'配件樣品', SC0PS:'合作商品樣品', SH0CU:'物料樣品',
+  U1119:'自動折傘19吋', U1120:'自動折傘20吋', U1121:'自動折傘21吋', U1122:'自動折傘22吋', U1123:'自動折傘23吋', U1125:'自動折傘25吋', U1127:'自動折傘27吋',
+  U1219:'手開折傘19吋', U1220:'手開折傘20吋', U1221:'手開折傘21吋', U1222:'手開折傘22吋', U1223:'手開折傘23吋', U1225:'手開折傘25吋', U1227:'手開折傘27吋',
+  U1319:'安全自動19吋', U1320:'安全自動20吋', U1321:'安全自動21吋', U1322:'安全自動22吋', U1323:'安全自動23吋', U1325:'安全自動25吋', U1327:'安全自動27吋',
+  U1419:'電動折傘19吋', U1420:'電動折傘20吋', U1421:'電動折傘21吋', U1423:'電動折傘23吋', U1425:'電動折傘25吋', U1427:'電動折傘27吋',
+  USLSL:'特賣商品',
+  ZZ1ZA:'季節折價券', ZZ1ZB:'開卡禮', ZZ1ZC:'首下載禮', ZZ1ZD:'升等禮', ZZ1ZF:'常態折價券',
+};
+
+function skuToLabel(sku: string): string {
+  const prefix = sku.toUpperCase().slice(0, 5);
+  const name = SKU_PREFIX_MAP[prefix];
+  return name ? `${prefix} ${name}` : `${prefix} 未知品項`;
+}
+
 function ChannelAnalysisPage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [selectedSku, setSelectedSku] = useState('');
@@ -1844,37 +1890,41 @@ function InventoryPage() {
   const categoryStats = useMemo(() => {
     const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
     const last3 = allMonths.slice(-3);
-    const skuAvgSales = new Map<string, number>();
+    // avg monthly sales per prefix (品項) over last 3 months
+    const prefixAvgSales = new Map<string, number>();
     for (const r of sales.rows) {
-      const sku = String(r.external_sku || '');
+      const prefix = String(r.external_sku || '').toUpperCase().slice(0, 5);
       const month = String(r.sold_at || '').slice(0, 7);
-      if (!sku || !last3.includes(month)) continue;
-      skuAvgSales.set(sku, (skuAvgSales.get(sku) ?? 0) + Number(r.quantity ?? 0));
+      if (!prefix || !last3.includes(month)) continue;
+      prefixAvgSales.set(prefix, (prefixAvgSales.get(prefix) ?? 0) + Number(r.quantity ?? 0));
     }
-    for (const [sku, total] of skuAvgSales) skuAvgSales.set(sku, last3.length ? total / last3.length : 0);
-    const catMap = new Map<string, { stock: number; value: number; monthlySales: number }>();
+    for (const [p, total] of prefixAvgSales) prefixAvgSales.set(p, last3.length ? total / last3.length : 0);
+
+    // Aggregate by 5-char SKU prefix
+    const catMap = new Map<string, { label: string; stock: number; value: number; monthlySales: number }>();
     for (const inv of currentBySku) {
       const sku = String(inv.external_sku || '');
-      const cat = skuToCategory.get(sku) || '未分類';
+      const prefix = sku.toUpperCase().slice(0, 5);
+      const label = skuToLabel(sku);
       const qty = Number(inv.quantity ?? 0);
-      const entry = catMap.get(cat) ?? { stock: 0, value: 0, monthlySales: 0 };
+      const entry = catMap.get(prefix) ?? { label, stock: 0, value: 0, monthlySales: prefixAvgSales.get(prefix) ?? 0 };
       entry.stock += qty;
       entry.value += qty * (skuCostMap.get(sku) ?? 0);
-      entry.monthlySales += skuAvgSales.get(sku) ?? 0;
-      catMap.set(cat, entry);
+      catMap.set(prefix, entry);
     }
     const total = [...catMap.values()].reduce((s, v) => s + v.stock, 0) || 1;
-    return [...catMap.entries()]
-      .map(([category, v]) => ({
-        category,
+    return [...catMap.values()]
+      .map((v) => ({
+        category: v.label,
         stock: v.stock,
         value: v.value,
         monthlySales: Math.round(v.monthlySales),
         turnoverDays: v.monthlySales > 0 ? Math.round(v.stock / (v.monthlySales / 30)) : Infinity,
         pct: v.stock / total * 100,
       }))
+      .filter((v) => v.stock > 0)
       .sort((a, b) => b.stock - a.stock);
-  }, [currentBySku, skuToCategory, skuCostMap, sales.rows]);
+  }, [currentBySku, skuCostMap, sales.rows]);
 
   const channelDist = useMemo(() => {
     const map = new Map<string, { channel: string; quantity: number; locations: Map<string, number> }>();
