@@ -1348,16 +1348,6 @@ function SalesPage() {
     });
   }, [sales.rows]);
 
-  // 前10商品長條圖資料
-  const top10ChartData = useMemo(() =>
-    productRows.map((r) => ({
-      name: r.label.length > 18 ? r.label.slice(0, 18) + '…' : r.label,
-      revenue: r.revenue,
-      qty: r.quantity,
-    })),
-    [productRows],
-  );
-
   return (
     <Page title="業績追蹤" subtitle="依日期區間查看業績、目標、MOM、YOY 與排行">
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
@@ -1435,25 +1425,6 @@ function SalesPage() {
               <Line yAxisId="rev" type="monotone" dataKey="revenue" name="業績" stroke="#fd5e4b" strokeWidth={2.5} dot={{ r: 4, fill: '#fd5e4b' }} activeDot={{ r: 6 }} />
               <Line yAxisId="qty" type="monotone" dataKey="qty" name="銷量（件）" stroke="#fd8391" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#fd8391' }} />
             </LineChart>
-          </ResponsiveContainer>
-        </section>
-      )}
-
-      {/* 商品業績前10長條圖 */}
-      {top10ChartData.length > 0 && (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <h3 className="mb-4 font-semibold">商品業績排行 Top 10（{selectedMonth.replace('-', '/')}）</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={top10ChartData} layout="vertical" margin={{ top: 0, right: 16, left: 8, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-              <XAxis type="number" tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
-              <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11, fill: '#64748b' }} />
-              <Tooltip
-                formatter={(value: number) => [formatCurrency(value), '業績']}
-                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
-              />
-              <Bar dataKey="revenue" name="業績" fill="#fd5e4b" radius={[0, 4, 4, 0]} maxBarSize={20} />
-            </BarChart>
           </ResponsiveContainer>
         </section>
       )}
@@ -1591,6 +1562,20 @@ function ChannelAnalysisPage() {
 
   // Channel revenue summary for pie chart (aggregated from product_store_sales)
   const channelRevenueSummary = useMemo(() => {
+    // 優先使用 channel_sales_records（channelTrendRows），數字最準確
+    // 因為 product_store_sales 在部分月份可能沒有完整的門市分解資料
+    const trendMonthRows = channelTrendRows.filter(
+      (r) => String(r.sales_month || '').slice(0, 7) === selectedMonth
+    );
+    if (trendMonthRows.length > 0) {
+      return CHANNELS
+        .map((ch) => {
+          const row = trendMonthRows.find((r) => r.channel_category === ch);
+          return { label: ch, quantity: row ? Number(row.quantity) : 0, revenue: row ? Number(row.revenue) : 0 };
+        })
+        .filter((c) => c.revenue > 0 || c.quantity > 0);
+    }
+    // Fallback：若 channelTrendRows 尚未載入此月，改用 product_store_sales 彙總
     const map = new Map<string, { quantity: number; revenue: number }>();
     for (const r of monthRows) {
       const ch = String(r.channel_category || '');
@@ -1602,7 +1587,7 @@ function ChannelAnalysisPage() {
     return CHANNELS
       .map((ch) => ({ label: ch, ...(map.get(ch) ?? { quantity: 0, revenue: 0 }) }))
       .filter((c) => c.revenue > 0 || c.quantity > 0);
-  }, [monthRows]);
+  }, [channelTrendRows, monthRows, selectedMonth]);
 
   // Top 5 stores per physical channel
   const storeTop5 = useMemo(() => {
@@ -2233,32 +2218,26 @@ function InventoryPage() {
         </section>
       )}
 
-      {/* 各分類庫存佔比長條圖 */}
+      {/* 各分類庫存佔比（與各通路庫存分佈同風格） */}
       {categoryStats.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <h3 className="mb-4 font-semibold">各分類庫存佔比</h3>
-          <ResponsiveContainer width="100%" height={Math.max(200, categoryStats.length * 28)}>
-            <BarChart
-              data={categoryStats.slice(0, 15).map((c) => ({
-                name: c.category.length > 14 ? c.category.slice(0, 14) + '…' : c.category,
-                stock: c.stock,
-                days: c.turnoverDays === Infinity ? null : c.turnoverDays,
-              }))}
-              layout="vertical" margin={{ top: 0, right: 20, left: 8, bottom: 0 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-              <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: '#64748b' }} />
-              <Tooltip
-                formatter={(value: number, name: string) =>
-                  name === '庫存量' ? [`${value.toLocaleString('zh-TW')} 件`, name] : [`${value} 天`, name]
-                }
-                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="stock" name="庫存量" fill="#fd5e4b" radius={[0, 4, 4, 0]} maxBarSize={18} />
-            </BarChart>
-          </ResponsiveContainer>
+          <div className="space-y-2">
+            {(() => {
+              const maxStock = Math.max(...categoryStats.map((c) => c.stock), 1);
+              return categoryStats.map((c) => (
+                <div key={c.category}>
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span className="font-medium text-slate-700">{c.category}</span>
+                    <span className="text-slate-500">{c.stock.toLocaleString('zh-TW')} 件　{c.pct.toFixed(0)}%</span>
+                  </div>
+                  <div className="h-4 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div style={{ width: `${c.stock / maxStock * 100}%` }} className="h-full bg-coral transition-all" />
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
         </section>
       )}
 
