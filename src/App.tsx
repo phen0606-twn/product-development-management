@@ -2,6 +2,7 @@ import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 're
 import type { ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
 
@@ -1337,6 +1338,26 @@ function SalesPage() {
     return { total, skus };
   }, [records, productSearchKw]);
   const productRows = rank(group(records, salesProductLabel)).slice(0, 10);
+
+  // 近 6 個月業績趨勢（折線圖）
+  const trendData = useMemo(() => {
+    const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
+    return allMonths.slice(-6).map((month) => {
+      const rows = sales.rows.filter((r) => String(r.sold_at || '').slice(0, 7) === month);
+      return { month: month.replace('-', '/'), revenue: sum(rows, 'revenue'), qty: sum(rows, 'quantity') };
+    });
+  }, [sales.rows]);
+
+  // 前10商品長條圖資料
+  const top10ChartData = useMemo(() =>
+    productRows.map((r) => ({
+      name: r.label.length > 18 ? r.label.slice(0, 18) + '…' : r.label,
+      revenue: r.revenue,
+      qty: r.quantity,
+    })),
+    [productRows],
+  );
+
   return (
     <Page title="業績追蹤" subtitle="依日期區間查看業績、目標、MOM、YOY 與排行">
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
@@ -1394,6 +1415,49 @@ function SalesPage() {
         <div className="grid gap-3 md:grid-cols-5"><Card label="月目標" value={formatCurrency(target)} compact /><Card label="月達成率" value={`${(target ? revenue / target * 100 : 0).toFixed(1)}%`} compact /><Card label="年度目標" value={formatCurrency(annualTarget)} compact /><Card label="年度業績" value={formatCurrency(annualSales)} compact /><Card label="年度進度" value={`${annualTarget ? (annualSales / annualTarget * 100).toFixed(1) : '0.0'}%`} compact /></div>
         <div className="grid gap-3 md:grid-cols-2"><Card label="MOM" value={growth(revenue, prevMonth)} helper={`前月 ${formatCurrency(prevMonth)}`} compact /><Card label="YOY" value={growth(revenue, prevYear)} helper={`去年同期 ${formatCurrency(prevYear)}`} compact /></div>
       </div>
+      {/* 近 6 個月業績趨勢折線圖 */}
+      {trendData.length >= 2 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <h3 className="mb-4 font-semibold">近 6 個月業績趨勢</h3>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={trendData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#94a3b8' }} />
+              <YAxis yAxisId="rev" tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={{ fontSize: 11, fill: '#94a3b8' }} width={60} />
+              <YAxis yAxisId="qty" orientation="right" tick={{ fontSize: 11, fill: '#94a3b8' }} width={40} />
+              <Tooltip
+                formatter={(value: number, name: string) =>
+                  name === '業績' ? [formatCurrency(value), name] : [`${value.toLocaleString('zh-TW')} 件`, name]
+                }
+                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line yAxisId="rev" type="monotone" dataKey="revenue" name="業績" stroke="#fd5e4b" strokeWidth={2.5} dot={{ r: 4, fill: '#fd5e4b' }} activeDot={{ r: 6 }} />
+              <Line yAxisId="qty" type="monotone" dataKey="qty" name="銷量（件）" stroke="#fd8391" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#fd8391' }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </section>
+      )}
+
+      {/* 商品業績前10長條圖 */}
+      {top10ChartData.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <h3 className="mb-4 font-semibold">商品業績排行 Top 10（{selectedMonth.replace('-', '/')}）</h3>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={top10ChartData} layout="vertical" margin={{ top: 0, right: 16, left: 8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+              <XAxis type="number" tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11, fill: '#64748b' }} />
+              <Tooltip
+                formatter={(value: number) => [formatCurrency(value), '業績']}
+                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
+              />
+              <Bar dataKey="revenue" name="業績" fill="#fd5e4b" radius={[0, 4, 4, 0]} maxBarSize={20} />
+            </BarChart>
+          </ResponsiveContainer>
+        </section>
+      )}
+
       <Summary title="商品業績排行" rows={productRows} />
       <SalesRecordsTable records={records} />
     </Page>
@@ -1448,6 +1512,13 @@ function skuToLabel(sku: string): string {
   return name ? `${prefix} ${name}` : `${prefix} 未知品項`;
 }
 
+const CHANNEL_COLORS: Record<string, string> = {
+  '網路官網／平台': '#fd5e4b',
+  '街邊店': '#fd8391',
+  '捷運門市': '#fddf98',
+  '加盟門市': '#4ECDC4',
+};
+
 function ChannelAnalysisPage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [selectedSku, setSelectedSku] = useState('');
@@ -1461,6 +1532,7 @@ function ChannelAnalysisPage() {
   const [productSearching, setProductSearching] = useState(false);
   const [crossStart, setCrossStart] = useState('');
   const [crossEnd, setCrossEnd] = useState('');
+  const [channelTrendRows, setChannelTrendRows] = useState<Row[]>([]);
 
   const monthShortcuts = useMemo(() => {
     const merged = [...recentMonths, ...availableMonths];
@@ -1482,6 +1554,18 @@ function ChannelAnalysisPage() {
         if (data) setAvailableMonths([...new Set(data.map((r) => String(r.sales_month).slice(0, 7)))].sort().reverse());
       });
   }, []);
+
+  // 各通路近 6 個月趨勢（from channel_sales_records）
+  useEffect(() => {
+    if (!supabase || availableMonths.length === 0) return;
+    const last6 = [...availableMonths].sort().slice(-6);
+    const earliest = `${last6[0]}-01`;
+    const latest = monthEnd(last6[last6.length - 1]);
+    supabase.from('channel_sales_records')
+      .select('sales_month,channel_category,quantity,revenue')
+      .gte('sales_month', earliest).lte('sales_month', latest).limit(2000)
+      .then(({ data }) => setChannelTrendRows(data ?? []));
+  }, [availableMonths]);
 
   // Fetch data for the selected month directly — avoids the global 3000-row cap
   useEffect(() => {
@@ -1529,6 +1613,20 @@ function ChannelAnalysisPage() {
     }
     return result;
   }, [monthRows]);
+
+  // 通路趨勢折線圖資料：每個月一個點，每條線代表一個通路
+  const channelTrendChartData = useMemo(() => {
+    const months = [...new Set(channelTrendRows.map((r) => String(r.sales_month || '').slice(0, 7)).filter(Boolean))].sort();
+    return months.map((month) => {
+      const mRows = channelTrendRows.filter((r) => String(r.sales_month || '').startsWith(month));
+      const point: Record<string, string | number> = { month: month.replace('-', '/') };
+      for (const ch of CHANNELS) {
+        const row = mRows.find((r) => r.channel_category === ch);
+        point[ch] = row ? Math.round(Number(row.revenue)) : 0;
+      }
+      return point;
+    });
+  }, [channelTrendRows]);
 
   const skuOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -1647,6 +1745,30 @@ function ChannelAnalysisPage() {
           </div>
         )}
       </section>
+
+      {/* 各通路業績趨勢折線圖 */}
+      {channelTrendChartData.length >= 2 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <h3 className="mb-1 font-semibold">各通路業績趨勢（近 6 個月）</h3>
+          <p className="mb-4 text-xs text-slate-400">可對比不同通路在各月份的業績變化</p>
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={channelTrendChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#94a3b8' }} />
+              <YAxis tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={{ fontSize: 11, fill: '#94a3b8' }} width={60} />
+              <Tooltip
+                formatter={(value: number, name: string) => [formatCurrency(value), name]}
+                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {CHANNELS.map((ch) => (
+                <Line key={ch} type="monotone" dataKey={ch} stroke={CHANNEL_COLORS[ch]} strokeWidth={2.5}
+                  dot={{ r: 4, fill: CHANNEL_COLORS[ch] }} activeDot={{ r: 6 }} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </section>
+      )}
 
       {channelRevenueSummary.length > 0 && <ChannelSummary rows={channelRevenueSummary} />}
 
@@ -2063,7 +2185,7 @@ function InventoryPage() {
       {categoryStats.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <h3 className="mb-1 font-semibold">分類庫存總覽</h3>
-          <p className="mb-4 text-xs text-slate-400">月均銷量與週轉天數以近 3 個月平均計算</p>
+          <p className="mb-4 text-xs text-slate-400">月均銷量與週轉天數以近 3 個月平均計算；🔴 &gt;365天 橘色 180–365天 🟢 ≤180天</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -2077,8 +2199,9 @@ function InventoryPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {categoryStats.map((c) => {
-                  const urgent = c.turnoverDays < 60;
-                  const caution = c.turnoverDays >= 60 && c.turnoverDays < 120;
+                  // >365 天 → 紅色（滯銷）；180–365 天 → 橘色（偏慢）；≤180 天 → 綠色（健康）
+                  const turnRed = c.turnoverDays > 365;
+                  const turnOrange = c.turnoverDays >= 180 && c.turnoverDays <= 365;
                   return (
                     <tr key={c.category} className="group hover:bg-slate-50">
                       <td className="py-2.5 pr-4">
@@ -2096,7 +2219,7 @@ function InventoryPage() {
                       <td className="py-2.5 text-right">
                         {c.turnoverDays === Infinity
                           ? <span className="text-xs text-slate-300">無銷售</span>
-                          : <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${urgent ? 'bg-red-100 text-red-600' : caution ? 'bg-amber-100 text-amber-700' : 'bg-emerald-50 text-emerald-600'}`}>
+                          : <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${turnRed ? 'bg-red-100 text-red-600' : turnOrange ? 'bg-orange-100 text-orange-600' : 'bg-emerald-50 text-emerald-600'}`}>
                               {c.turnoverDays} 天
                             </span>
                         }
@@ -2107,6 +2230,35 @@ function InventoryPage() {
               </tbody>
             </table>
           </div>
+        </section>
+      )}
+
+      {/* 各分類庫存佔比長條圖 */}
+      {categoryStats.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <h3 className="mb-4 font-semibold">各分類庫存佔比</h3>
+          <ResponsiveContainer width="100%" height={Math.max(200, categoryStats.length * 28)}>
+            <BarChart
+              data={categoryStats.slice(0, 15).map((c) => ({
+                name: c.category.length > 14 ? c.category.slice(0, 14) + '…' : c.category,
+                stock: c.stock,
+                days: c.turnoverDays === Infinity ? null : c.turnoverDays,
+              }))}
+              layout="vertical" margin={{ top: 0, right: 20, left: 8, bottom: 0 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: '#64748b' }} />
+              <Tooltip
+                formatter={(value: number, name: string) =>
+                  name === '庫存量' ? [`${value.toLocaleString('zh-TW')} 件`, name] : [`${value} 天`, name]
+                }
+                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="stock" name="庫存量" fill="#fd5e4b" radius={[0, 4, 4, 0]} maxBarSize={18} />
+            </BarChart>
+          </ResponsiveContainer>
         </section>
       )}
 
