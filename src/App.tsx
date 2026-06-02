@@ -2547,6 +2547,31 @@ function InventoryPage() {
 }
 
 function parseInventoryExcel(data: unknown[][]): Row[] {
+  if (data.length === 0) return [];
+
+  // ── 格式自動偵測 ──────────────────────────────────────────────────────────
+  // 格式 A（平面表格）：header = ['商品型號', '品名規格', '庫點', '單價', '折扣', '庫存', ...]
+  //   → col[0]=SKU, col[1]=商品名, col[2]=庫點, col[5]=庫存量
+  // 格式 B（層級格式）：header = ['商品', '庫存', ...]
+  //   → SKU 行後接各庫點明細行
+  const header = (data[0] as unknown[]).map((c) => String(c ?? '').trim());
+  const isTabular = header[0] === '商品型號' && header[2] === '庫點';
+
+  if (isTabular) {
+    // ── 格式 A：每行 = 一筆 (SKU, 庫點, 數量) ────────────────────────────
+    const records: Row[] = [];
+    for (const row of data.slice(1)) {
+      const sku  = String(row[0] ?? '').trim().toUpperCase();
+      const name = String(row[1] ?? '').trim();
+      const loc  = String(row[2] ?? '').trim();
+      const qty  = Number(row[5] ?? 0);
+      if (!sku || sku === '商品型號' || !isFinite(qty) || qty === 0) continue;
+      records.push({ external_sku: sku, product_name: `${sku} ${name}`.trim(), location: loc, quantity: qty });
+    }
+    return records;
+  }
+
+  // ── 格式 B：舊式層級格式（SKU 標頭 + 各庫點明細行）─────────────────────
   const records: Row[] = [];
   let currentSku = '';
   let currentName = '';
@@ -2555,27 +2580,32 @@ function parseInventoryExcel(data: unknown[][]): Row[] {
 
   function flush() {
     if (!currentSku) return;
-    // Use per-location rows when available; fall back to SKU header total
-    records.push(...(locRows.length > 0 ? locRows : [{ external_sku: currentSku, product_name: `${currentSku} ${currentName}`, location: '', quantity: currentSkuQty }]));
+    records.push(...(locRows.length > 0
+      ? locRows
+      : [{ external_sku: currentSku, product_name: `${currentSku} ${currentName}`, location: '', quantity: currentSkuQty }]
+    ));
     locRows = [];
   }
 
   for (const row of data) {
-    const label = String(row[0] ?? '').trim();
-    const qty = Number(row[1] ?? 0);
+    const label  = String(row[0] ?? '').trim();
+    const rawQty = row[1];
+    // Guard: only accept numeric values; text (e.g. product name in wrong column) → skip
+    const qty = typeof rawQty === 'number' && isFinite(rawQty) ? rawQty : 0;
     if (!label || label === '商品') continue;
     const firstWord = label.split(/\s+/)[0] ?? '';
     if (/^[A-Za-z]{2,}\d/.test(firstWord)) {
       flush();
-      currentSku = firstWord.toUpperCase();
+      currentSku  = firstWord.toUpperCase();
       currentName = label.slice(firstWord.length).trim();
-      currentSkuQty = qty;
+      // Only use numeric qty for SKU header total; text values mean wrong format
+      currentSkuQty = typeof rawQty === 'number' && isFinite(rawQty) ? rawQty : 0;
     } else if (currentSku && qty !== 0 && /^\d{4,6}$|^[A-Z]\d{3}|^0ZZZZ/.test(firstWord)) {
       locRows.push({ external_sku: currentSku, product_name: `${currentSku} ${currentName}`, location: label, quantity: qty });
     }
   }
   flush();
-  return records;
+  return records.filter((r) => isFinite(Number(r.quantity)) && r.quantity !== null);
 }
 
 function ImportPage() {
@@ -2682,11 +2712,19 @@ function ImportPage() {
     setInvMsg('解析中...');
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    // 優先找含「各倉」或「庫存」的 sheet（例如「0531各倉庫存」），
+    // 若沒有則用第一個 sheet（舊格式工作表1 等）
+    const invSheetName: string =
+      workbook.SheetNames.find((n: string) => /各倉|庫存/.test(n)) ??
+      workbook.SheetNames[0];
+    const sheet = workbook.Sheets[invSheetName];
     const data: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
     const rows = parseInventoryExcel(data);
     setInvRows(rows); setInvFile(file.name);
-    setInvMsg(rows.length ? `已解析 ${rows.length} 筆（${new Set(rows.map((r) => r.external_sku)).size} 個 SKU），請確認後匯入。` : '未解析到資料，請確認格式。');
+    const sheetNote = invSheetName !== workbook.SheetNames[0] ? `（sheet：${invSheetName}）` : '';
+    setInvMsg(rows.length
+      ? `已解析 ${rows.length} 筆（${new Set(rows.map((r) => r.external_sku)).size} 個 SKU）${sheetNote}，請確認後匯入。`
+      : `未解析到資料${sheetNote}，請確認格式。`);
   }
 
   async function doInvImport() {
