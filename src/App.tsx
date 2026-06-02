@@ -1815,43 +1815,6 @@ function InventoryPage() {
     return map;
   }, [products.rows]);
 
-  const categoryStats = useMemo(() => {
-    const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
-    const last3 = allMonths.slice(-3);
-    // avg monthly sales per SKU over last 3 months
-    const skuAvgSales = new Map<string, number>();
-    for (const r of sales.rows) {
-      const sku = String(r.external_sku || '');
-      const month = String(r.sold_at || '').slice(0, 7);
-      if (!sku || !last3.includes(month)) continue;
-      skuAvgSales.set(sku, (skuAvgSales.get(sku) ?? 0) + Number(r.quantity ?? 0));
-    }
-    for (const [sku, total] of skuAvgSales) skuAvgSales.set(sku, last3.length ? total / last3.length : 0);
-
-    const catMap = new Map<string, { stock: number; value: number; monthlySales: number }>();
-    for (const inv of currentBySku) {
-      const sku = String(inv.external_sku || '');
-      const cat = skuToCategory.get(sku) || '未分類';
-      const qty = Number(inv.quantity ?? 0);
-      const entry = catMap.get(cat) ?? { stock: 0, value: 0, monthlySales: 0 };
-      entry.stock += qty;
-      entry.value += qty * (skuCostMap.get(sku) ?? 0);
-      entry.monthlySales += skuAvgSales.get(sku) ?? 0;
-      catMap.set(cat, entry);
-    }
-    const totalStock = [...catMap.values()].reduce((s, v) => s + v.stock, 0) || 1;
-    return [...catMap.entries()]
-      .map(([category, v]) => ({
-        category,
-        stock: v.stock,
-        value: v.value,
-        monthlySales: Math.round(v.monthlySales),
-        turnoverDays: v.monthlySales > 0 ? Math.round(v.stock / (v.monthlySales / 30)) : Infinity,
-        pct: v.stock / totalStock * 100,
-      }))
-      .sort((a, b) => b.stock - a.stock);
-  }, [currentBySku, skuToCategory, skuCostMap, sales.rows]);
-
   const maxTotal = useMemo(() => Math.max(...chartData.map((d) => d.total), 1), [chartData]);
   const snapshotTotal = useMemo(() => latestBySku.reduce((s, r) => s + Number(r.quantity ?? 0), 0), [latestBySku]);
   const totalDeducted = useMemo(() => [...postSnapshotSoldMap.values()].reduce((s, v) => s + v, 0), [postSnapshotSoldMap]);
@@ -1860,7 +1823,7 @@ function InventoryPage() {
   const totalSold = useMemo(() => chartData.reduce((s, d) => s + d.sold, 0), [chartData]);
   const avgRate = useMemo(() => chartData.length ? chartData.reduce((s, d) => s + d.rate, 0) / chartData.length : 0, [chartData]);
 
-  // 各 SKU 單位成本（從 sku_costs 表）
+  // 各 SKU 單位成本（從 sku_costs 表）— 必須在 categoryStats 之前宣告
   const skuCostMap = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of skuCosts.rows) {
@@ -1877,6 +1840,41 @@ function InventoryPage() {
     }, 0),
     [currentBySku, skuCostMap],
   );
+
+  const categoryStats = useMemo(() => {
+    const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
+    const last3 = allMonths.slice(-3);
+    const skuAvgSales = new Map<string, number>();
+    for (const r of sales.rows) {
+      const sku = String(r.external_sku || '');
+      const month = String(r.sold_at || '').slice(0, 7);
+      if (!sku || !last3.includes(month)) continue;
+      skuAvgSales.set(sku, (skuAvgSales.get(sku) ?? 0) + Number(r.quantity ?? 0));
+    }
+    for (const [sku, total] of skuAvgSales) skuAvgSales.set(sku, last3.length ? total / last3.length : 0);
+    const catMap = new Map<string, { stock: number; value: number; monthlySales: number }>();
+    for (const inv of currentBySku) {
+      const sku = String(inv.external_sku || '');
+      const cat = skuToCategory.get(sku) || '未分類';
+      const qty = Number(inv.quantity ?? 0);
+      const entry = catMap.get(cat) ?? { stock: 0, value: 0, monthlySales: 0 };
+      entry.stock += qty;
+      entry.value += qty * (skuCostMap.get(sku) ?? 0);
+      entry.monthlySales += skuAvgSales.get(sku) ?? 0;
+      catMap.set(cat, entry);
+    }
+    const total = [...catMap.values()].reduce((s, v) => s + v.stock, 0) || 1;
+    return [...catMap.entries()]
+      .map(([category, v]) => ({
+        category,
+        stock: v.stock,
+        value: v.value,
+        monthlySales: Math.round(v.monthlySales),
+        turnoverDays: v.monthlySales > 0 ? Math.round(v.stock / (v.monthlySales / 30)) : Infinity,
+        pct: v.stock / total * 100,
+      }))
+      .sort((a, b) => b.stock - a.stock);
+  }, [currentBySku, skuToCategory, skuCostMap, sales.rows]);
 
   const channelDist = useMemo(() => {
     const map = new Map<string, { channel: string; quantity: number; locations: Map<string, number> }>();
