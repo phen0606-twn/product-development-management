@@ -2407,27 +2407,64 @@ function ImportPage() {
     setSalesRows(parsed.salesRows); setChannelRows(parsed.channelRows);
     setStoreRows(parsed.storeRows); setProductStoreRows(parsed.productStoreRows);
     setSalesFile(file.name);
-    setSalesMsg(parsed.salesRows.length ? `已解析 ${parsed.salesRows.length} 筆商品業績、${parsed.storeRows.length} 筆門市業績，請確認後匯入。` : '沒有解析到資料，請確認格式。');
+    if (!parsed.salesRows.length) { setSalesMsg('沒有解析到資料，請確認格式。'); return; }
+
+    // ── 冪等性預檢：查詢 DB 是否已有相同日期資料 ──
+    let baseMsg = `已解析 ${parsed.salesRows.length} 筆商品業績、${parsed.storeRows.length} 筆門市業績，請確認後匯入。`;
+    if (supabase) {
+      const dates = [...new Set(parsed.salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
+      const checks = await Promise.all(
+        dates.map((d) => supabase!.from('sales_records').select('id', { count: 'exact', head: true }).eq('sold_at', d))
+      );
+      const existing = dates.map((d, i) => ({ date: d, count: checks[i].count ?? 0 })).filter((x) => x.count > 0);
+      if (existing.length > 0) {
+        const warn = existing.map((x) => `${x.date}（${x.count} 筆）`).join('、');
+        baseMsg += ` ⚠ 資料庫已有相同日期：${warn}，匯入將自動覆蓋，不會重複計算。`;
+      }
+    }
+    setSalesMsg(baseMsg);
   }
 
   async function doSalesImport() {
     if (!supabase || salesRows.length === 0) return;
     setSalesImporting(true);
-    // Delete only the specific sold_at dates from this import (preserves other weeks)
     const soldDates = [...new Set(salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
+
+    // ── 防線 1：逐一刪除並檢查 error，任一失敗立即中止 ──
+    const TABLES_TO_DELETE = [
+      { table: 'sales_records',              col: 'sold_at'     },
+      { table: 'channel_sales_records',       col: 'sales_month' },
+      { table: 'channel_store_sales_records', col: 'sales_month' },
+      { table: 'product_store_sales',         col: 'sales_month' },
+    ] as const;
     for (const date of soldDates) {
-      await supabase.from('sales_records').delete().eq('sold_at', date);
-      await supabase.from('channel_sales_records').delete().eq('sales_month', date);
-      await supabase.from('channel_store_sales_records').delete().eq('sales_month', date);
-      await supabase.from('product_store_sales').delete().eq('sales_month', date);
+      for (const { table, col } of TABLES_TO_DELETE) {
+        const { error: delErr } = await supabase.from(table).delete().eq(col, date);
+        if (delErr) {
+          setSalesMsg(`❌ 刪除失敗（${table} / ${date}）：${delErr.message}。匯入已中止，資料未變動。`);
+          setSalesImporting(false);
+          return;
+        }
+      }
     }
+
+    // ── 插入 ──
     const { error } = await supabase.from('sales_records').insert(salesRows);
-    if (!error && channelRows.length) await supabase.from('channel_sales_records').insert(channelRows);
-    if (!error && storeRows.length) await supabase.from('channel_store_sales_records').insert(storeRows);
-    if (!error && productStoreRows.length) await supabase.from('product_store_sales').insert(productStoreRows);
+    if (error) { setSalesMsg(`❌ 匯入失敗：${error.message}`); setSalesImporting(false); return; }
+    if (channelRows.length) await supabase.from('channel_sales_records').insert(channelRows);
+    if (storeRows.length) await supabase.from('channel_store_sales_records').insert(storeRows);
+    if (productStoreRows.length) await supabase.from('product_store_sales').insert(productStoreRows);
+
+    // ── 防線 2：驗證 DB 計數與預期一致 ──
+    const { count: dbCount } = await supabase
+      .from('sales_records').select('id', { count: 'exact', head: true }).in('sold_at', soldDates);
     const dateLabel = soldDates.join('、') || importMonth;
-    setSalesMsg(error ? `匯入失敗：${error.message}` : `✓ 已匯入 ${dateLabel} 業績（${salesRows.length} 筆），其餘週資料不受影響。`);
-    if (!error) { setSalesRows([]); setChannelRows([]); setStoreRows([]); setProductStoreRows([]); }
+    if (dbCount !== salesRows.length) {
+      setSalesMsg(`⚠ 匯入完成但數量異常：預期 ${salesRows.length} 筆，資料庫實際 ${dbCount} 筆（${dateLabel}）。請聯絡管理員確認。`);
+    } else {
+      setSalesMsg(`✓ 已匯入並驗證 ${dateLabel} 業績（${dbCount} 筆），數量正確。`);
+    }
+    setSalesRows([]); setChannelRows([]); setStoreRows([]); setProductStoreRows([]);
     setSalesImporting(false);
   }
 
@@ -2451,23 +2488,38 @@ function ImportPage() {
   async function doInvImport() {
     if (!supabase || invRows.length === 0) return;
     setInvImporting(true);
-    // Delete only same date + same SKU records (preserves other dates and other SKUs on same date)
     const skus = [...new Set(invRows.map((r) => String(r.external_sku || '')).filter(Boolean))];
+
+    // ── 冪等性預檢：若同日已有資料則提示 ──
+    const { count: existingCount } = await supabase
+      .from('inventory_records').select('id', { count: 'exact', head: true }).eq('recorded_at', recordDate);
+    if ((existingCount ?? 0) > 0) {
+      setInvMsg(`ℹ️ ${recordDate} 已有 ${existingCount} 筆庫存記錄，將覆蓋同日同貨號資料...`);
+    }
+
+    // ── 防線 1：逐批刪除，檢查 error ──
     for (let i = 0; i < skus.length; i += 100) {
       const chunk = skus.slice(i, i + 100);
       const { error: delErr } = await supabase
-        .from('inventory_records')
-        .delete()
-        .eq('recorded_at', recordDate)
-        .in('external_sku', chunk);
-      if (delErr) { setInvMsg(`刪除失敗：${delErr.message}`); setInvImporting(false); return; }
+        .from('inventory_records').delete().eq('recorded_at', recordDate).in('external_sku', chunk);
+      if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}。匯入已中止。`); setInvImporting(false); return; }
     }
+
+    // ── 插入 ──
     const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
     for (let i = 0; i < rowsWithDate.length; i += 500) {
       const { error } = await supabase.from('inventory_records').insert(rowsWithDate.slice(i, i + 500));
-      if (error) { setInvMsg(`匯入失敗：${error.message}`); setInvImporting(false); return; }
+      if (error) { setInvMsg(`❌ 匯入失敗：${error.message}`); setInvImporting(false); return; }
     }
-    setInvMsg(`✓ 已匯入 ${recordDate} 共 ${invRows.length} 筆（${skus.length} 個 SKU），同日同貨號舊資料已覆蓋。`);
+
+    // ── 防線 2：驗證計數 ──
+    const { count: dbCount } = await supabase
+      .from('inventory_records').select('id', { count: 'exact', head: true }).eq('recorded_at', recordDate);
+    if ((dbCount ?? 0) < invRows.length) {
+      setInvMsg(`⚠ 匯入完成但數量異常：預期 ${invRows.length} 筆，資料庫實際 ${dbCount} 筆。`);
+    } else {
+      setInvMsg(`✓ 已匯入並驗證 ${recordDate} 共 ${invRows.length} 筆（${skus.length} 個 SKU），數量正確。`);
+    }
     setInvRows([]);
     setInvImporting(false);
   }
