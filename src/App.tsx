@@ -236,6 +236,54 @@ function useRows(table: string, order = 'created_at') {
   return { rows, loading, error, reload: load };
 }
 
+/** 比對 sales_records（明細）與 channel_sales_records（通路彙總）的月度總業績是否一致。
+ *  差異 > 0.5% 時 ok=false，畫面應顯示 DataConsistencyWarning。 */
+function useDataConsistencyCheck(month: string) {
+  const [check, setCheck] = useState<{
+    salesTotal: number; channelTotal: number; diff: number; pct: number; ok: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!supabase || !month) return;
+    setCheck(null);
+    const start = `${month}-01`;
+    const end = monthEnd(month);
+    Promise.all([
+      supabase.from('sales_records').select('revenue').gte('sold_at', start).lte('sold_at', end).limit(10000),
+      supabase.from('channel_sales_records').select('revenue').gte('sales_month', start).lte('sales_month', end),
+    ]).then(([sRes, cRes]) => {
+      const salesTotal   = (sRes.data ?? []).reduce((s, r) => s + Number(r.revenue ?? 0), 0);
+      const channelTotal = (cRes.data ?? []).reduce((s, r) => s + Number(r.revenue ?? 0), 0);
+      const diff = Math.abs(salesTotal - channelTotal);
+      const pct  = salesTotal > 0 ? diff / salesTotal * 100 : 0;
+      setCheck({ salesTotal, channelTotal, diff, pct, ok: pct < 0.5 });
+    });
+  }, [month]);
+
+  return check;
+}
+
+function DataConsistencyWarning({ check }: {
+  check: { salesTotal: number; channelTotal: number; diff: number; pct: number };
+}) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+      <span className="mt-0.5 text-amber-500">⚠</span>
+      <div>
+        <p className="font-medium text-amber-800">資料一致性警告</p>
+        <p className="mt-1 text-amber-700">
+          業績追蹤（明細表）合計 <strong>{formatCurrency(check.salesTotal)}</strong>，
+          通路分析（通路彙總）合計 <strong>{formatCurrency(check.channelTotal)}</strong>，
+          差異 {formatCurrency(check.diff)}（{check.pct.toFixed(1)}%）。
+        </p>
+        <p className="mt-1 text-xs text-amber-600">
+          可能原因：Excel 明細行加總與通路彙總欄位不符。建議重新確認來源資料後重新匯入。
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard() {
   const products = useRows('products');
   const costs = useRows('development_costs');
@@ -1348,8 +1396,14 @@ function SalesPage() {
     });
   }, [sales.rows]);
 
+  // 資料一致性驗證（明細表 vs 通路彙總）
+  const consistencyCheck = useDataConsistencyCheck(selectedMonth);
+
   return (
     <Page title="業績追蹤" subtitle="依日期區間查看業績、目標、MOM、YOY 與排行">
+      {consistencyCheck && !consistencyCheck.ok && (
+        <DataConsistencyWarning check={consistencyCheck} />
+      )}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <div className="grid gap-3 md:grid-cols-3">
           <label className="block text-sm">依月份選擇業績
@@ -1405,25 +1459,25 @@ function SalesPage() {
         <div className="grid gap-3 md:grid-cols-5"><Card label="月目標" value={formatCurrency(target)} compact /><Card label="月達成率" value={`${(target ? revenue / target * 100 : 0).toFixed(1)}%`} compact /><Card label="年度目標" value={formatCurrency(annualTarget)} compact /><Card label="年度業績" value={formatCurrency(annualSales)} compact /><Card label="年度進度" value={`${annualTarget ? (annualSales / annualTarget * 100).toFixed(1) : '0.0'}%`} compact /></div>
         <div className="grid gap-3 md:grid-cols-2"><Card label="MOM" value={growth(revenue, prevMonth)} helper={`前月 ${formatCurrency(prevMonth)}`} compact /><Card label="YOY" value={growth(revenue, prevYear)} helper={`去年同期 ${formatCurrency(prevYear)}`} compact /></div>
       </div>
-      {/* 近 6 個月業績趨勢折線圖 */}
+      {/* 近 6 個月業績趨勢折線圖（.claude/skills/chart-style 規範） */}
       {trendData.length >= 2 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <h3 className="mb-4 font-semibold">近 6 個月業績趨勢</h3>
           <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={trendData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-              <YAxis yAxisId="rev" tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={{ fontSize: 11, fill: '#94a3b8' }} width={60} />
-              <YAxis yAxisId="qty" orientation="right" tick={{ fontSize: 11, fill: '#94a3b8' }} width={40} />
+            <LineChart data={trendData} margin={CHART_MARGIN}>
+              <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+              <XAxis dataKey="month" tick={CHART_TICK_MD} />
+              <YAxis yAxisId="rev" tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={CHART_TICK} width={60} />
+              <YAxis yAxisId="qty" orientation="right" tick={CHART_TICK} width={40} />
               <Tooltip
                 formatter={(value: number, name: string) =>
                   name === '業績' ? [formatCurrency(value), name] : [`${value.toLocaleString('zh-TW')} 件`, name]
                 }
-                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
+                contentStyle={CHART_TOOLTIP}
               />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Line yAxisId="rev" type="monotone" dataKey="revenue" name="業績" stroke="#fd5e4b" strokeWidth={2.5} dot={{ r: 4, fill: '#fd5e4b' }} activeDot={{ r: 6 }} />
-              <Line yAxisId="qty" type="monotone" dataKey="qty" name="銷量（件）" stroke="#fd8391" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: '#fd8391' }} />
+              <Legend wrapperStyle={CHART_LEGEND} />
+              <Line yAxisId="rev" type="monotone" dataKey="revenue" name="業績" stroke={CHART_PRIMARY} strokeWidth={CHART_STROKE_W} dot={{ r: 4, fill: CHART_PRIMARY }} activeDot={CHART_ACTIVE_DOT} />
+              <Line yAxisId="qty" type="monotone" dataKey="qty" name="銷量（件）" stroke={CHART_SECONDARY} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: CHART_SECONDARY }} />
             </LineChart>
           </ResponsiveContainer>
         </section>
@@ -1483,9 +1537,22 @@ function skuToLabel(sku: string): string {
   return name ? `${prefix} ${name}` : `${prefix} 未知品項`;
 }
 
+// ─── Chart style constants (.claude/skills/chart-style/SKILL.md) ─────────────
+const CHART_PRIMARY    = '#E8705A';
+const CHART_SECONDARY  = '#F4A090';
+const CHART_GRID       = '#f1f5f9';
+const CHART_TICK       = { fontSize: 11, fill: '#94a3b8' } as const;
+const CHART_TICK_MD    = { fontSize: 12, fill: '#94a3b8' } as const;
+const CHART_TOOLTIP    = { borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 } as const;
+const CHART_LEGEND     = { fontSize: 12 } as const;
+const CHART_MARGIN     = { top: 4, right: 16, left: 0, bottom: 0 } as const;
+const CHART_STROKE_W   = 2.5;
+const CHART_ACTIVE_DOT = { r: 6 } as const;
+// ─────────────────────────────────────────────────────────────────────────────
+
 const CHANNEL_COLORS: Record<string, string> = {
-  '網路官網／平台': '#fd5e4b',
-  '街邊店': '#fd8391',
+  '網路官網／平台': '#E8705A',
+  '街邊店': '#F4A090',
   '捷運門市': '#fddf98',
   '加盟門市': '#4ECDC4',
 };
@@ -1659,9 +1726,15 @@ function ChannelAnalysisPage() {
     return rank(group(productStoreRows, (r) => `[${r.channel_category}] ${r.store_name}`));
   }, [productStoreRows]);
 
+  // 資料一致性驗證（明細表 vs 通路彙總）
+  const consistencyCheck = useDataConsistencyCheck(selectedMonth);
+
   return (
     <Page title="通路分析" subtitle="各通路商品銷售前三名、各商品最佳門市排行">
       <TopLinks links={[['/sales', '返回業績追蹤']]} />
+      {consistencyCheck && !consistencyCheck.ok && (
+        <DataConsistencyWarning check={consistencyCheck} />
+      )}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <label className="block text-sm">選擇月份
           <input type="month" value={selectedMonth} onChange={(e) => chooseMonth(e.target.value)} className="mt-1 w-full max-w-xs rounded-md border border-slate-200 px-3 py-2" />
@@ -1731,24 +1804,24 @@ function ChannelAnalysisPage() {
         )}
       </section>
 
-      {/* 各通路業績趨勢折線圖 */}
+      {/* 各通路業績趨勢折線圖（.claude/skills/chart-style 規範） */}
       {channelTrendChartData.length >= 2 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <h3 className="mb-1 font-semibold">各通路業績趨勢（近 6 個月）</h3>
           <p className="mb-4 text-xs text-slate-400">可對比不同通路在各月份的業績變化</p>
           <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={channelTrendChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#94a3b8' }} />
-              <YAxis tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={{ fontSize: 11, fill: '#94a3b8' }} width={60} />
+            <LineChart data={channelTrendChartData} margin={CHART_MARGIN}>
+              <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+              <XAxis dataKey="month" tick={CHART_TICK_MD} />
+              <YAxis tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={CHART_TICK} width={60} />
               <Tooltip
                 formatter={(value: number, name: string) => [formatCurrency(value), name]}
-                contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}
+                contentStyle={CHART_TOOLTIP}
               />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Legend wrapperStyle={CHART_LEGEND} />
               {CHANNELS.map((ch) => (
-                <Line key={ch} type="monotone" dataKey={ch} stroke={CHANNEL_COLORS[ch]} strokeWidth={2.5}
-                  dot={{ r: 4, fill: CHANNEL_COLORS[ch] }} activeDot={{ r: 6 }} connectNulls />
+                <Line key={ch} type="monotone" dataKey={ch} stroke={CHANNEL_COLORS[ch]} strokeWidth={CHART_STROKE_W}
+                  dot={{ r: 4, fill: CHANNEL_COLORS[ch] }} activeDot={CHART_ACTIVE_DOT} connectNulls />
               ))}
             </LineChart>
           </ResponsiveContainer>
