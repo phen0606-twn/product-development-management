@@ -1290,8 +1290,6 @@ function DataForm({ title, row, fields, onSave, onCancel }: { title: string; row
 function SalesPage() {
   const sales = useRows('sales_records', 'sold_at');
   const targets = useRows('sales_targets');
-  const channelSales = useRows('channel_sales_records');
-  const stores = useRows('channel_store_sales_records');
   const [start, setStart] = useState(`${new Date().toISOString().slice(0, 7)}-01`);
   const [end, setEnd] = useState(monthEnd(new Date().toISOString().slice(0, 7)));
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -1339,10 +1337,6 @@ function SalesPage() {
     return { total, skus };
   }, [records, productSearchKw]);
   const productRows = rank(group(records, salesProductLabel)).slice(0, 10);
-  const channelRows = channelData(channelSales.rows, records, months);
-  const street = rank(group(stores.rows.filter((r) => r.channel_category === '街邊店' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
-  const mrt = rank(group(stores.rows.filter((r) => r.channel_category === '捷運門市' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
-  const franchise = rank(group(stores.rows.filter((r) => r.channel_category === '加盟門市' && months.includes(String(r.sales_month).slice(0, 7))), (r) => r.store_name)).slice(0, 5);
   return (
     <Page title="業績追蹤" subtitle="依日期區間查看業績、目標、MOM、YOY 與排行">
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
@@ -1400,8 +1394,7 @@ function SalesPage() {
         <div className="grid gap-3 md:grid-cols-5"><Card label="月目標" value={formatCurrency(target)} compact /><Card label="月達成率" value={`${(target ? revenue / target * 100 : 0).toFixed(1)}%`} compact /><Card label="年度目標" value={formatCurrency(annualTarget)} compact /><Card label="年度業績" value={formatCurrency(annualSales)} compact /><Card label="年度進度" value={`${annualTarget ? (annualSales / annualTarget * 100).toFixed(1) : '0.0'}%`} compact /></div>
         <div className="grid gap-3 md:grid-cols-2"><Card label="MOM" value={growth(revenue, prevMonth)} helper={`前月 ${formatCurrency(prevMonth)}`} compact /><Card label="YOY" value={growth(revenue, prevYear)} helper={`去年同期 ${formatCurrency(prevYear)}`} compact /></div>
       </div>
-      <section className="grid gap-6 xl:grid-cols-2"><Summary title="商品業績排行" rows={productRows} /><ChannelSummary rows={channelRows} /></section>
-      <section className="mt-6 grid gap-6 xl:grid-cols-3"><Summary title="街邊店前五名" rows={street} /><Summary title="捷運門市前五名" rows={mrt} /><Summary title="加盟門市前五名" rows={franchise} /></section>
+      <Summary title="商品業績排行" rows={productRows} />
       <SalesRecordsTable records={records} />
     </Page>
   );
@@ -1465,6 +1458,31 @@ function ChannelAnalysisPage() {
     }),
     [monthRows],
   );
+
+  // Channel revenue summary for pie chart (aggregated from product_store_sales)
+  const channelRevenueSummary = useMemo(() => {
+    const map = new Map<string, { quantity: number; revenue: number }>();
+    for (const r of monthRows) {
+      const ch = String(r.channel_category || '');
+      const entry = map.get(ch) ?? { quantity: 0, revenue: 0 };
+      entry.quantity += Number(r.quantity ?? 0);
+      entry.revenue += Number(r.revenue ?? 0);
+      map.set(ch, entry);
+    }
+    return CHANNELS
+      .map((ch) => ({ label: ch, ...(map.get(ch) ?? { quantity: 0, revenue: 0 }) }))
+      .filter((c) => c.revenue > 0 || c.quantity > 0);
+  }, [monthRows]);
+
+  // Top 5 stores per physical channel
+  const storeTop5 = useMemo(() => {
+    const result = new Map<string, Array<{ label: string; quantity: number; revenue: number; rank: number }>>();
+    for (const ch of ['街邊店', '捷運門市', '加盟門市']) {
+      const chRows = monthRows.filter((r) => r.channel_category === ch);
+      result.set(ch, rank(group(chRows, (r) => String(r.store_name || ''))).slice(0, 5));
+    }
+    return result;
+  }, [monthRows]);
 
   const skuOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -1583,6 +1601,16 @@ function ChannelAnalysisPage() {
           </div>
         )}
       </section>
+
+      {channelRevenueSummary.length > 0 && <ChannelSummary rows={channelRevenueSummary} />}
+
+      {(['街邊店', '捷運門市', '加盟門市'] as const).some((ch) => (storeTop5.get(ch) ?? []).length > 0) && (
+        <section className="grid gap-6 md:grid-cols-3">
+          {(['街邊店', '捷運門市', '加盟門市'] as const).map((ch) => (
+            <Summary key={ch} title={`${ch}前五名`} rows={storeTop5.get(ch) ?? []} />
+          ))}
+        </section>
+      )}
 
       <section>
         <h3 className="mb-3 font-semibold">各通路商品前三名</h3>
