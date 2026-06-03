@@ -1920,12 +1920,12 @@ const SIZE_MAP: Record<string, string> = {
   '4': 'XL', '5': '2L', '6': '3L', '7': '4L', '8': '5L',
 };
 
-/** 顏色代碼對照表（2 碼英文 → 中文） */
+/** 顏色代碼對照表（英文代碼 → 中文） */
 const COLOR_MAP: Record<string, string> = {
-  BK: '黑', WT: '白', WH: '白', RD: '紅', BL: '藍',
-  NV: '深藍', GR: '綠', GY: '灰', PK: '粉', BE: '米',
-  BR: '棕', YL: '黃', OR: '橙', PP: '紫', CR: '奶油',
-  LB: '淺藍', LG: '淺綠', PR: '紫', LV: '薰衣草',
+  BK: '黑', WT: '白', PK: '粉', GN: '綠', YL: '黃',
+  PL: '紫', RD: '紅', BN: '咖/棕', GY: '灰', CO: '膚',
+  KK: '卡其', RB: '彩虹', MC: '迷彩', LP: '豹紋', NO: '無分色',
+  OG: '橘', GD: '金', SV: '銀', MIX: '混色', BL: '藍',
 };
 
 /** 從 SKU 或商品名稱中解析顏色與尺寸。
@@ -1936,14 +1936,19 @@ const COLOR_MAP: Record<string, string> = {
 function parseSkuColorSize(sku: string, name: string): { color: string; size: string } {
   const sizeWordRe = /^(ONESIZE|FREE|OS|XXL|XL|2XL|3XL|XS|[SML]|\d{2,3}(?:cm|號)?)$/i;
 
-  // 格式 1：末尾「2 大寫英文 + 1 數字」→ 顏色代碼 + 尺寸序號
-  // 例：AS1SE0004WT4 → color=WT(白), size=4
-  const concatMatch = sku.match(/^.+([A-Z]{2})(\d)$/);
-  if (concatMatch) {
-    const colorCode = concatMatch[1];
-    const color = COLOR_MAP[colorCode] ?? colorCode;
-    const size = SIZE_MAP[concatMatch[2]] ?? concatMatch[2];
-    return { color, size };
+  // 格式 1：連接式末尾「色碼(2–3 大寫英文) + 1 數字(尺寸)」
+  // 例：AS1SE0004WT4 → WT=白, 4=XL　　AS1SE0004MIX3 → MIX=混色, 3=L
+  // 先嘗試 3 碼（如 MIX），再嘗試 2 碼（如 WT/BK）
+  const lastChar = sku[sku.length - 1];
+  if (lastChar && /\d/.test(lastChar)) {
+    const code3 = sku.slice(-4, -1);   // 倒數第 2–4 碼
+    const code2 = sku.slice(-3, -1);   // 倒數第 2–3 碼
+    if (/^[A-Z]{3}$/.test(code3) && code3 in COLOR_MAP) {
+      return { color: COLOR_MAP[code3], size: SIZE_MAP[lastChar] ?? lastChar };
+    }
+    if (/^[A-Z]{2}$/.test(code2)) {
+      return { color: COLOR_MAP[code2] ?? code2, size: SIZE_MAP[lastChar] ?? lastChar };
+    }
   }
 
   // 格式 2：破折號分隔 BASE-COLOR-SIZE
