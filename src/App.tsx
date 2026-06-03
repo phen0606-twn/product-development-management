@@ -97,7 +97,11 @@ export default function App() {
         <p className="mt-1 text-xs text-white/55">防曬 / 天氣商品開發系統</p>
         <nav className="mt-6 space-y-0.5">
           {nav.filter(([to, , , adminOnly]) => !(isViewer && adminOnly)).map(([to, label, Icon]) => (
-            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${isActive ? 'bg-leaf text-white font-medium' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `flex items-center gap-3 text-sm transition-colors ${
+              isActive
+                ? 'bg-sun text-white font-semibold -ml-5 pl-8 pr-3 py-2 rounded-r-lg border-l-[4px] border-white/50'
+                : 'rounded-md px-3 py-2 text-white/70 hover:bg-white/10 hover:text-white'
+            }`}>
               <Icon className="h-4 w-4 shrink-0" />
               {label}
             </NavLink>
@@ -161,7 +165,7 @@ function PasswordReset({ onDone }: { onDone: () => void }) {
         <p className="mt-2 text-sm text-slate-500">請設定之後登入系統要使用的密碼。</p>
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="新密碼，至少 8 個字" className="mt-5 w-full rounded-md border border-slate-200 px-3 py-2" required />
         <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="再輸入一次新密碼" className="mt-3 w-full rounded-md border border-slate-200 px-3 py-2" required />
-        <button className="mt-4 w-full rounded-md bg-leaf px-4 py-2 text-white">設定密碼</button>
+        <button className="mt-4 w-full rounded-md bg-sun px-4 py-2 text-white">設定密碼</button>
         {message && <p className="mt-4 text-sm text-slate-600">{message}</p>}
       </form>
     </main>
@@ -199,7 +203,7 @@ function Login() {
         <p className="mt-2 text-sm text-slate-500">請使用已授權的 Email 與密碼登入。</p>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="mt-5 w-full rounded-md border border-slate-200 px-3 py-2" required />
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="密碼" className="mt-3 w-full rounded-md border border-slate-200 px-3 py-2" required />
-        <button className="mt-4 w-full rounded-md bg-leaf px-4 py-2 text-white">登入</button>
+        <button className="mt-4 w-full rounded-md bg-sun px-4 py-2 text-white">登入</button>
         <button type="button" onClick={sendMagicLink} disabled={sendingLink} className="mt-3 w-full rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-600 disabled:opacity-50">
           {sendingLink ? '寄送中...' : '改用 Email 登入連結'}
         </button>
@@ -383,10 +387,10 @@ function Dashboard() {
   return (
     <Page title="Dashboard" subtitle="開發商品、費用與業績總覽">
       <div className="grid gap-4 md:grid-cols-4">
-        <Card label="開發中商品" value={String(active)} />
+        <Card label="開發中商品" value={String(active)} tone="lime" />
         <Card label="延遲商品" value={String(delayed)} tone="coral" />
         <Card label="本月費用" value={formatCurrency(monthCost)} />
-        <Card label="本月業績" value={formatCurrency(monthSales)} />
+        <Card label="本月業績" value={formatCurrency(monthSales)} tone="lime" />
       </div>
       <StatusSummary rows={statusRows} />
       {arrivingSoon.length > 0 && (
@@ -693,7 +697,7 @@ function ProductDetailPage() {
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-base font-semibold text-ink">批次費用明細</h3>
           <div className="flex gap-3">
-            <button type="button" onClick={() => { setCostOpen(!costOpen); }} className="rounded-md bg-leaf px-3 py-1.5 text-sm text-white hover:opacity-90">＋ 新增費用</button>
+            <button type="button" onClick={() => { setCostOpen(!costOpen); }} className="rounded-md bg-sun px-3 py-1.5 text-sm text-white hover:opacity-90">＋ 新增費用</button>
             <button type="button" onClick={() => { setBatchOpen(!batchOpen); setBatchData({}); }} className="rounded-md border border-leaf px-3 py-1.5 text-sm text-leaf hover:bg-leaf hover:text-white">＋ 新增批次</button>
             <Link to="/costs" className="text-sm text-leaf hover:underline self-center">費用管理 →</Link>
           </div>
@@ -716,7 +720,7 @@ function ProductDetailPage() {
               </label>
             </div>
             <div className="mt-3 flex gap-2">
-              <button type="button" onClick={saveBatch} disabled={!batchData.name?.trim() || batchSaving} className="rounded-md bg-leaf px-4 py-1.5 text-sm text-white disabled:opacity-40">{batchSaving ? '建立中...' : '建立批次'}</button>
+              <button type="button" onClick={saveBatch} disabled={!batchData.name?.trim() || batchSaving} className="rounded-md bg-sun px-4 py-1.5 text-sm text-white disabled:opacity-40">{batchSaving ? '建立中...' : '建立批次'}</button>
               <button type="button" onClick={() => setBatchOpen(false)} className="text-sm text-slate-400">取消</button>
             </div>
           </div>
@@ -1206,7 +1210,7 @@ function ProgressForm({ row, onSave, onCancel }: { row: Row | null; onSave: (dat
         </div>
       </div>
       <div className="mt-5 flex gap-2">
-        <button className="rounded-md bg-leaf px-4 py-2 text-sm text-white">儲存</button>
+        <button className="rounded-md bg-sun px-4 py-2 text-sm text-white">儲存</button>
         <button type="button" onClick={onCancel} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
       </div>
     </form>
@@ -1252,7 +1256,7 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
               <input placeholder="商品名稱（必填）" value={newProductName} onChange={(e) => setNewProductName(e.target.value)} className="w-full rounded border px-2 py-1 text-sm" />
               <input placeholder="貨號（選填）" value={newProductSku} onChange={(e) => setNewProductSku(e.target.value)} className="w-full rounded border px-2 py-1 text-sm" />
               <div className="flex gap-2">
-                <button type="button" onClick={createProduct} disabled={!newProductName.trim() || saving} className="rounded bg-leaf px-3 py-1 text-xs text-white disabled:opacity-40">{saving ? '建立中...' : '建立並選取'}</button>
+                <button type="button" onClick={createProduct} disabled={!newProductName.trim() || saving} className="rounded bg-sun px-3 py-1 text-xs text-white disabled:opacity-40">{saving ? '建立中...' : '建立並選取'}</button>
                 <button type="button" onClick={() => setAddingProduct(false)} className="text-xs text-slate-400">取消</button>
               </div>
             </div>
@@ -1301,7 +1305,7 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
         <label className="text-sm md:col-span-3">備註<textarea value={data.notes ?? ''} onChange={(e) => setData({ ...data, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" rows={2} /></label>
       </div>
       <div className="mt-4 flex gap-2">
-        <button className="rounded-md bg-leaf px-4 py-2 text-sm text-white">儲存</button>
+        <button className="rounded-md bg-sun px-4 py-2 text-sm text-white">儲存</button>
         <button type="button" onClick={onCancel} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
       </div>
     </form>
@@ -1329,7 +1333,7 @@ function DataForm({ title, row, fields, onSave, onCancel }: { title: string; row
         ))}
       </div>
       <div className="mt-5 flex gap-2">
-        <button className="rounded-md bg-leaf px-4 py-2 text-sm text-white">儲存</button>
+        <button className="rounded-md bg-sun px-4 py-2 text-sm text-white">儲存</button>
         <button type="button" onClick={onCancel} className="rounded-md border border-slate-200 px-4 py-2 text-sm">取消</button>
       </div>
     </form>
@@ -1538,8 +1542,8 @@ function skuToLabel(sku: string): string {
 }
 
 // ─── Chart style constants (.claude/skills/chart-style/SKILL.md) ─────────────
-const CHART_PRIMARY    = '#572A87';   // Purple
-const CHART_SECONDARY  = '#86B926';   // Dark Lemon Lime
+const CHART_PRIMARY    = '#86B926';   // Dark Lemon Lime（主角）
+const CHART_SECONDARY  = '#572A87';   // Purple（配角）
 const CHART_GRID       = '#f0ecf7';
 const CHART_TICK       = { fontSize: 11, fill: '#9b8bae' } as const;
 const CHART_TICK_MD    = { fontSize: 12, fill: '#9b8bae' } as const;
@@ -1549,7 +1553,7 @@ const CHART_MARGIN     = { top: 4, right: 16, left: 0, bottom: 0 } as const;
 const CHART_STROKE_W   = 2.5;
 const CHART_ACTIVE_DOT = { r: 6 } as const;
 // 多數列圖表調色盤（依序使用）
-const CHART_PALETTE    = ['#572A87', '#86B926', '#984696', '#3E651C', '#9DD0E0', '#C5AAE1'] as const;
+const CHART_PALETTE    = ['#86B926', '#572A87', '#984696', '#3E651C', '#9DD0E0', '#C5AAE1'] as const;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -1778,7 +1782,7 @@ function ChannelAnalysisPage() {
             type="button"
             onClick={searchProductStores}
             disabled={productKeyword.trim().length < 2 || productSearching}
-            className="self-end rounded-md bg-leaf px-4 py-2 text-sm text-white disabled:opacity-40"
+            className="self-end rounded-md bg-sun px-4 py-2 text-sm text-white disabled:opacity-40"
           >
             {productSearching ? '查詢中...' : '查詢'}
           </button>
@@ -2451,9 +2455,9 @@ function InventoryPage() {
       </section>
 
       <div className="grid gap-3 md:grid-cols-4">
-        <Card label={`目前庫存量${latestSnapshotDate ? `（${latestSnapshotDate} 快照後自動扣銷）` : ''}`} value={`${totalStock.toLocaleString('zh-TW')} 件`} compact />
+        <Card label={`目前庫存量${latestSnapshotDate ? `（${latestSnapshotDate} 快照後自動扣銷）` : ''}`} value={`${totalStock.toLocaleString('zh-TW')} 件`} compact tone="lime" />
         <Card label="庫存成本金額" value={formatCurrency(totalInventoryValue)} compact />
-        <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact />
+        <Card label={`${selectedMonth.replace('-', '/')} 銷量`} value={`${totalSold.toLocaleString('zh-TW')} 件`} compact tone="lime" />
         <Card label="平均銷售率" value={`${avgRate.toFixed(1)}%`} compact />
       </div>
 
@@ -2483,7 +2487,7 @@ function InventoryPage() {
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-slate-700">{c.category}</span>
                           <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
-                            <div style={{ width: `${c.pct}%` }} className="h-full bg-leaf/40 transition-all" />
+                            <div style={{ width: `${c.pct}%` }} className="h-full bg-sun/50 transition-all" />
                           </div>
                           <span className="text-xs text-slate-400">{c.pct.toFixed(0)}%</span>
                         </div>
@@ -2582,7 +2586,7 @@ function InventoryPage() {
                   <button
                     type="button"
                     onClick={exportInventoryExcel}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-leaf px-3 py-1 text-xs font-medium text-leaf hover:bg-leaf hover:text-white transition-colors"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-sun px-3 py-1 text-xs font-medium text-white hover:opacity-90 transition-colors"
                   >
                     ↓ 匯出 Excel
                   </button>
@@ -2682,7 +2686,7 @@ function InventoryPage() {
             {selectedTrendStore && (
               <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50 p-4">
                 <div className="mb-3 flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full bg-leaf" />
+                  <span className="h-2 w-2 rounded-full bg-sun" />
                   <h4 className="text-sm font-semibold text-slate-700">
                     {selectedTrendStore}　近 3 個月銷售趨勢
                   </h4>
@@ -2809,7 +2813,7 @@ function InventoryPage() {
 
       <div className="flex items-center justify-between">
         <h3 className="font-semibold">庫存明細</h3>
-        <button onClick={() => { setEditing(null); setOpen(true); }} className="inline-flex items-center gap-2 rounded-md bg-leaf px-4 py-2 text-sm text-white">
+        <button onClick={() => { setEditing(null); setOpen(true); }} className="inline-flex items-center gap-2 rounded-md bg-sun px-4 py-2 text-sm text-white">
           <Plus className="h-4 w-4" />新增庫存
         </button>
       </div>
@@ -2892,7 +2896,7 @@ function InventoryPage() {
       ) : (
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
           <div className="flex items-center gap-4 border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
-            <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-leaf" />本月銷量</span>
+            <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-sun" />本月銷量</span>
             <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-sun" />剩餘庫存</span>
             <span className="ml-auto text-slate-400">點商品名稱展開位置明細</span>
           </div>
@@ -2930,7 +2934,7 @@ function InventoryPage() {
                     </td>
                     <td className="p-3">
                       <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
-                        <div style={{ width: `${d.sold / maxTotal * 100}%` }} className="bg-leaf transition-all" />
+                        <div style={{ width: `${d.sold / maxTotal * 100}%` }} className="bg-sun transition-all" />
                         <div style={{ width: `${d.stock / maxTotal * 100}%` }} className="bg-sun transition-all" />
                       </div>
                     </td>
@@ -3229,7 +3233,7 @@ function ImportPage() {
             <label className="text-sm">匯入月份<input name="month" type="month" defaultValue={importMonth} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
             <label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
           </div>
-          <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-sm text-white">預覽業績資料</button>
+          <button className="mt-4 rounded-md bg-sun px-4 py-2 text-sm text-white">預覽業績資料</button>
           {salesMsg && <p className="mt-3 text-sm text-slate-600">{salesMsg}</p>}
         </form>
         {salesRows.length > 0 && (
@@ -3241,7 +3245,7 @@ function ImportPage() {
               </div>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setSalesRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
-                <button type="button" onClick={doSalesImport} disabled={salesImporting} className="rounded-md bg-leaf px-3 py-1.5 text-sm text-white disabled:opacity-50">{salesImporting ? '匯入中...' : '確認匯入'}</button>
+                <button type="button" onClick={doSalesImport} disabled={salesImporting} className="rounded-md bg-sun px-3 py-1.5 text-sm text-white disabled:opacity-50">{salesImporting ? '匯入中...' : '確認匯入'}</button>
               </div>
             </div>
             <Table columns={['日期', 'SKU', '商品', '通路', '數量', '金額']}>
@@ -3269,7 +3273,7 @@ function ImportPage() {
             <label className="text-sm">盤點日期<input name="date" type="date" value={recordDate} onChange={(e) => setRecordDate(e.target.value)} className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
             <label className="text-sm md:col-span-2">Excel 檔案（新事業銷售庫存統計格式）<input name="file" type="file" accept=".xlsx,.xls" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
           </div>
-          <button className="mt-4 rounded-md bg-leaf px-4 py-2 text-sm text-white">預覽庫存資料</button>
+          <button className="mt-4 rounded-md bg-sun px-4 py-2 text-sm text-white">預覽庫存資料</button>
           {invMsg && <p className="mt-3 text-sm text-slate-600">{invMsg}</p>}
         </form>
         {invRows.length > 0 && (
@@ -3281,7 +3285,7 @@ function ImportPage() {
               </div>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setInvRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
-                <button type="button" onClick={doInvImport} disabled={invImporting} className="rounded-md bg-leaf px-3 py-1.5 text-sm text-white disabled:opacity-50">{invImporting ? '匯入中...' : '確認匯入'}</button>
+                <button type="button" onClick={doInvImport} disabled={invImporting} className="rounded-md bg-sun px-3 py-1.5 text-sm text-white disabled:opacity-50">{invImporting ? '匯入中...' : '確認匯入'}</button>
               </div>
             </div>
             <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-100">
@@ -3307,11 +3311,22 @@ function ImportPage() {
 }
 
 function Page({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
-  return <div className="space-y-6"><div><h2 className="text-2xl font-semibold text-ink">{title}</h2><p className="mt-1 text-slate-500">{subtitle}</p></div>{children}</div>;
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start gap-3">
+        <span className="mt-1 h-7 w-1 shrink-0 rounded-full bg-sun" />
+        <div>
+          <h2 className="text-2xl font-semibold text-ink">{title}</h2>
+          <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
 }
 
 function Toolbar({ onAdd, label }: { onAdd: () => void; label: string }) {
-  return <div className="mb-4 flex justify-end"><button onClick={onAdd} className="inline-flex items-center gap-2 rounded-md bg-leaf px-4 py-2 text-sm text-white"><Plus className="h-4 w-4" />{label}</button></div>;
+  return <div className="mb-4 flex justify-end"><button onClick={onAdd} className="inline-flex items-center gap-2 rounded-md bg-sun px-4 py-2 text-sm text-white hover:opacity-90"><Plus className="h-4 w-4" />{label}</button></div>;
 }
 
 function Notice({ children, tone = 'info' }: { children: React.ReactNode; tone?: 'info' | 'error' }) {

@@ -22,8 +22,8 @@
 ## 共用樣式常數（src/App.tsx 頂部宣告）
 
 ```typescript
-const CHART_PRIMARY    = '#572A87';   // Purple
-const CHART_SECONDARY  = '#86B926';   // Dark Lemon Lime
+const CHART_PRIMARY    = '#86B926';   // Dark Lemon Lime（主角）
+const CHART_SECONDARY  = '#572A87';   // Purple（配角）
 const CHART_GRID       = '#f0ecf7';
 const CHART_TICK       = { fontSize: 11, fill: '#9b8bae' } as const;
 const CHART_TICK_MD    = { fontSize: 12, fill: '#9b8bae' } as const;
@@ -63,7 +63,7 @@ const CHANNEL_COLORS: Record<string, string> = {
 - 多通路空值連線：加 `connectNulls`
 
 ### 長條圖（BarChart）
-- 主色：`fill={CHART_PRIMARY}` (`#572A87`)
+- 主色：`fill={CHART_PRIMARY}` (`#86B926`，萊姆綠為視覺主角)
 - 圓角：`radius={[4,4,0,0]}`（垂直）或 `radius={[0,4,4,0]}`（水平）
 - HTML 進度條風格：顏色用 `bg-leaf`（Plum）或 `bg-sakura`（Pale Cerulean）
 
