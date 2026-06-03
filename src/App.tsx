@@ -92,12 +92,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-mist lg:grid lg:grid-cols-[238px_1fr]">
-      <aside className="border-r border-slate-200 bg-white p-5">
-        <h1 className="text-lg font-semibold text-ink">商品開發管理</h1>
-        <p className="mt-1 text-xs text-slate-500">防曬 / 天氣商品開發系統</p>
+      <aside className="border-r border-navydark/40 bg-navy p-5">
+        <h1 className="text-lg font-semibold text-white">商品開發管理</h1>
+        <p className="mt-1 text-xs text-white/60">防曬 / 天氣商品開發系統</p>
         <nav className="mt-6 space-y-1">
           {nav.filter(([to, , , adminOnly]) => !(isViewer && adminOnly)).map(([to, label, Icon]) => (
-            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm ${isActive ? 'bg-leaf text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm ${isActive ? 'bg-leaf text-white shadow-sm' : 'text-white/75 hover:bg-white/10 hover:text-white'}`}>
               <Icon className="h-4 w-4" />
               {label}
             </NavLink>
@@ -105,8 +105,8 @@ export default function App() {
         </nav>
         {email && (
           <div className="mt-8">
-            {isViewer && <span className="mb-2 block rounded-md bg-slate-100 px-2 py-1 text-center text-xs text-slate-500">檢視者</span>}
-            <button onClick={() => supabase?.auth.signOut()} className="text-left text-xs text-slate-500">登出<br />{email}</button>
+            {isViewer && <span className="mb-2 block rounded-md bg-white/10 px-2 py-1 text-center text-xs text-white/70">檢視者</span>}
+            <button onClick={() => supabase?.auth.signOut()} className="text-left text-xs text-white/50 hover:text-white/80">登出<br />{email}</button>
           </div>
         )}
       </aside>
