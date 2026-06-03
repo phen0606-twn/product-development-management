@@ -2,7 +2,7 @@ import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 're
 import type { ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
-import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
 
@@ -1895,6 +1895,7 @@ function ChannelAnalysisPage() {
 }
 
 function classifyInventoryLocation(loc: string): string {
+  // 舊格式：以代碼前綴開頭（如 "000000 總倉"、"E001 平台"）
   if (/^000002\s/.test(loc)) return '退貨倉';
   if (/^000025\s/.test(loc)) return '報廢倉';
   if (/^000/.test(loc)) return '總倉';
@@ -1902,6 +1903,12 @@ function classifyInventoryLocation(loc: string): string {
   if (/^E\d{3}/.test(loc)) return '網路／平台';
   if (/^P002\s|^A000\s/.test(loc)) return '網路／平台';
   if (/^P003\s/.test(loc)) return '總倉';
+  // 新格式：純中文地點名稱（如 "總倉"、"祥丰官網倉"、"在途"）
+  if (/退貨/.test(loc)) return '退貨倉';
+  if (/報廢/.test(loc)) return '報廢倉';
+  if (/在途/.test(loc)) return '在途';
+  if (/官網倉|平台倉/.test(loc)) return '網路／平台';
+  if (/總倉|產品倉/.test(loc)) return '總倉';
   if (/捷運|M6/.test(loc)) return '捷運門市';
   if (/高雄|台南|台中|新竹|宜蘭/.test(loc)) return '加盟門市';
   return '街邊店';
@@ -1912,6 +1919,7 @@ function InventoryPage() {
   const sales = useRows('sales_records', 'sold_at');
   const products = useRows('products', 'created_at');
   const skuCosts = useRows('sku_costs', 'external_sku');
+  const productStoreSales = useRows('product_store_sales', 'sales_month');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -1922,6 +1930,10 @@ function InventoryPage() {
   const [showAllAlerts, setShowAllAlerts] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [expandedSku, setExpandedSku] = useState<string | null>(null);
+  // 門市庫存查詢
+  const [storeQuery, setStoreQuery] = useState('');
+  const [storeFilter, setStoreFilter] = useState('');
+  const [selectedTrendStore, setSelectedTrendStore] = useState<string | null>(null);
 
   const availableMonths = useMemo(
     () => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(),
@@ -2166,6 +2178,74 @@ function InventoryPage() {
     return result;
   }, [sales.rows, currentBySku]);
 
+  // ── 門市庫存查詢 ──────────────────────────────────────────────────────────────
+
+  // 下拉選單：所有有庫存的地點
+  const allLocations = useMemo(() => {
+    const locs = new Set<string>();
+    for (const locs2 of skuLocations.values())
+      for (const { location, quantity } of locs2)
+        if (quantity > 0 && location) locs.add(location);
+    return [...locs].sort((a, b) => a.localeCompare(b, 'zh-TW'));
+  }, [skuLocations]);
+
+  // 符合搜尋關鍵字的 SKU 集合
+  const matchedSkusForStore = useMemo(() => {
+    const kw = storeQuery.trim().toLowerCase();
+    if (kw.length < 2) return new Set<string>();
+    const matched = new Set<string>();
+    for (const inv of currentBySku) {
+      const sku  = String(inv.external_sku || '').toLowerCase();
+      const name = String(inv.product_name || '').toLowerCase();
+      if (sku.includes(kw) || name.includes(kw)) matched.add(String(inv.external_sku || ''));
+    }
+    return matched;
+  }, [storeQuery, currentBySku]);
+
+  // 各地點庫存彙總（依搜尋結果過濾）
+  const storeInvResults = useMemo(() => {
+    if (matchedSkusForStore.size === 0) return [];
+    const locMap = new Map<string, number>();
+    for (const [sku, locs] of skuLocations) {
+      if (!matchedSkusForStore.has(sku)) continue;
+      for (const { location, quantity } of locs) {
+        if (storeFilter && location !== storeFilter) continue;
+        locMap.set(location, (locMap.get(location) ?? 0) + quantity);
+      }
+    }
+    const arr = [...locMap.entries()]
+      .filter(([, q]) => q > 0)
+      .map(([location, quantity]) => ({ location, quantity }))
+      .sort((a, b) => b.quantity - a.quantity);
+    return arr;
+  }, [matchedSkusForStore, skuLocations, storeFilter]);
+
+  const storeInvTotal = useMemo(() => storeInvResults.reduce((s, r) => s + r.quantity, 0), [storeInvResults]);
+  const storeInvMax   = useMemo(() => storeInvResults[0]?.quantity ?? 0, [storeInvResults]);
+  const storeInvMin   = useMemo(() => storeInvResults[storeInvResults.length - 1]?.quantity ?? 0, [storeInvResults]);
+
+  // 近3個月銷售趨勢（點選門市後）
+  const storeSalesTrend = useMemo(() => {
+    if (!selectedTrendStore || matchedSkusForStore.size === 0) return [];
+    const allMonths = [...new Set(
+      productStoreSales.rows.map((r) => String(r.sales_month || '').slice(0, 7)).filter(Boolean)
+    )].sort();
+    const last3 = allMonths.slice(-3);
+    return last3.map((month) => {
+      let qty = 0, rev = 0;
+      for (const r of productStoreSales.rows) {
+        if (String(r.sales_month || '').slice(0, 7) !== month) continue;
+        if (String(r.store_name || '') !== selectedTrendStore) continue;
+        if (!matchedSkusForStore.has(String(r.external_sku || ''))) continue;
+        qty += Number(r.quantity ?? 0);
+        rev += Number(r.revenue ?? 0);
+      }
+      return { month, quantity: qty, revenue: rev };
+    });
+  }, [selectedTrendStore, matchedSkusForStore, productStoreSales.rows]);
+
+  // ── end 門市庫存查詢 ──────────────────────────────────────────────────────────
+
   const reorderAlerts = useMemo(() => {
     return chartData
       .map((d) => ({ ...d, v: skuVelocity.get(d.sku) }))
@@ -2291,28 +2371,168 @@ function InventoryPage() {
         </section>
       )}
 
-      {/* 各分類庫存佔比（與各通路庫存分佈同風格） */}
-      {categoryStats.length > 0 && (
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <h3 className="mb-4 font-semibold">各分類庫存佔比</h3>
-          <div className="space-y-2">
-            {(() => {
-              const maxStock = Math.max(...categoryStats.map((c) => c.stock), 1);
-              return categoryStats.map((c) => (
-                <div key={c.category}>
-                  <div className="mb-1 flex items-center justify-between text-xs">
-                    <span className="font-medium text-slate-700">{c.category}</span>
-                    <span className="text-slate-500">{c.stock.toLocaleString('zh-TW')} 件　{c.pct.toFixed(0)}%</span>
-                  </div>
-                  <div className="h-4 w-full overflow-hidden rounded-full bg-slate-100">
-                    <div style={{ width: `${c.stock / maxStock * 100}%` }} className="h-full bg-coral transition-all" />
-                  </div>
+      {/* ── 門市庫存查詢 ────────────────────────────────────────────────────────── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-4 font-semibold">門市庫存查詢</h3>
+
+        {/* 查詢條件 */}
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+          <input
+            type="text"
+            value={storeQuery}
+            onChange={(e) => { setStoreQuery(e.target.value); setSelectedTrendStore(null); }}
+            placeholder="輸入商品名稱或 SKU（2 字以上）"
+            className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-soft placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-leaf"
+          />
+          <select
+            value={storeFilter}
+            onChange={(e) => { setStoreFilter(e.target.value); setSelectedTrendStore(null); }}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-soft focus:outline-none focus:ring-2 focus:ring-leaf"
+          >
+            <option value="">全部門市</option>
+            {allLocations.map((loc) => <option key={loc} value={loc}>{loc}</option>)}
+          </select>
+        </div>
+
+        {storeQuery.trim().length < 2 ? (
+          <p className="py-6 text-center text-sm text-slate-400">輸入關鍵字開始查詢門市庫存分佈</p>
+        ) : storeInvResults.length === 0 ? (
+          <p className="py-6 text-center text-sm text-slate-400">找不到符合「{storeQuery.trim()}」的庫存記錄</p>
+        ) : (
+          <>
+            {/* 長條圖 */}
+            <div className="mb-5">
+              <ResponsiveContainer width="100%" height={Math.max(200, storeInvResults.length * 28)}>
+                <BarChart
+                  layout="vertical"
+                  data={storeInvResults}
+                  margin={{ top: 4, right: 48, left: 8, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} horizontal={false} />
+                  <XAxis type="number" tick={CHART_TICK} tickFormatter={(v) => v.toLocaleString('zh-TW')} />
+                  <YAxis type="category" dataKey="location" tick={CHART_TICK} width={80} />
+                  <Tooltip
+                    contentStyle={CHART_TOOLTIP}
+                    formatter={(v: number) => [`${v.toLocaleString('zh-TW')} 件`, '庫存量']}
+                  />
+                  <Bar dataKey="quantity" radius={[0, 4, 4, 0]} maxBarSize={20}>
+                    {storeInvResults.map((entry) => (
+                      <Cell
+                        key={entry.location}
+                        fill={
+                          entry.quantity === storeInvMax && storeInvMax !== storeInvMin
+                            ? '#10b981'
+                            : entry.quantity === storeInvMin && storeInvMax !== storeInvMin
+                            ? '#ef4444'
+                            : CHART_PRIMARY
+                        }
+                        cursor="pointer"
+                        onClick={() => setSelectedTrendStore(selectedTrendStore === entry.location ? null : entry.location)}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* 數字表格 */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-xs text-slate-400">
+                    <th className="pb-2 text-left font-medium">門市</th>
+                    <th className="pb-2 text-right font-medium">庫存量</th>
+                    <th className="pb-2 text-right font-medium">佔比</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {storeInvResults.map((r) => {
+                    const isMax = r.quantity === storeInvMax && storeInvMax !== storeInvMin;
+                    const isMin = r.quantity === storeInvMin && storeInvMax !== storeInvMin;
+                    const pct   = storeInvTotal > 0 ? r.quantity / storeInvTotal * 100 : 0;
+                    const isSelected = selectedTrendStore === r.location;
+                    return (
+                      <tr
+                        key={r.location}
+                        onClick={() => setSelectedTrendStore(isSelected ? null : r.location)}
+                        className={`cursor-pointer transition-colors hover:bg-slate-50 ${isSelected ? 'bg-slate-50' : ''}`}
+                      >
+                        <td className="py-2.5 pr-4">
+                          <div className="flex items-center gap-2">
+                            {isMax && <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-700">最高</span>}
+                            {isMin && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-xs font-semibold text-red-600">最低</span>}
+                            <span className={`font-medium ${isMax ? 'text-emerald-700' : isMin ? 'text-red-600' : 'text-slate-700'}`}>
+                              {r.location}
+                            </span>
+                            {isSelected && <span className="text-xs text-slate-400">▲ 查看銷售趨勢</span>}
+                          </div>
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums text-slate-700 font-medium">
+                          {r.quantity.toLocaleString('zh-TW')} 件
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums text-slate-500">
+                          {pct.toFixed(1)}%
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-slate-200">
+                    <td className="py-2.5 pr-4 text-sm font-semibold text-slate-600">合計</td>
+                    <td className="py-2.5 text-right tabular-nums font-semibold text-slate-700">
+                      {storeInvTotal.toLocaleString('zh-TW')} 件
+                    </td>
+                    <td className="py-2.5 text-right text-sm text-slate-400">100%</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {/* 近3個月銷售趨勢（點選門市後展開）*/}
+            {selectedTrendStore && (
+              <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-leaf" />
+                  <h4 className="text-sm font-semibold text-slate-700">
+                    {selectedTrendStore}　近 3 個月銷售趨勢
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTrendStore(null)}
+                    className="ml-auto text-xs text-slate-400 hover:text-slate-600"
+                  >
+                    ✕ 收起
+                  </button>
                 </div>
-              ));
-            })()}
-          </div>
-        </section>
-      )}
+                {storeSalesTrend.every((d) => d.quantity === 0) ? (
+                  <p className="py-4 text-center text-xs text-slate-400">此門市無對應銷售記錄</p>
+                ) : (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={storeSalesTrend} margin={CHART_MARGIN}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                      <XAxis dataKey="month" tick={CHART_TICK_MD} />
+                      <YAxis yAxisId="qty" tick={CHART_TICK} tickFormatter={(v) => `${v}件`} />
+                      <YAxis yAxisId="rev" orientation="right" tick={CHART_TICK} tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} />
+                      <Tooltip
+                        contentStyle={CHART_TOOLTIP}
+                        formatter={(value: number, name: string) =>
+                          name === '銷售金額'
+                            ? [formatCurrency(value), name]
+                            : [`${value.toLocaleString('zh-TW')} 件`, name]
+                        }
+                      />
+                      <Legend wrapperStyle={CHART_LEGEND} />
+                      <Line yAxisId="qty" type="monotone" dataKey="quantity" name="銷售件數" stroke={CHART_PRIMARY} strokeWidth={CHART_STROKE_W} dot={{ r: 4, fill: CHART_PRIMARY }} activeDot={CHART_ACTIVE_DOT} connectNulls />
+                      <Line yAxisId="rev" type="monotone" dataKey="revenue" name="銷售金額" stroke={CHART_SECONDARY} strokeWidth={CHART_STROKE_W} strokeDasharray="5 3" dot={{ r: 4, fill: CHART_SECONDARY }} activeDot={CHART_ACTIVE_DOT} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </section>
 
       {channelDist.length > 0 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
@@ -3136,83 +3356,151 @@ function parseSalesImport(workbook: any, utils: any, fallbackMonth: string) {
   return { salesRows: parseSales(workbook, utils, fallbackMonth), channelRows: [], storeRows: [], productStoreRows: [] };
 }
 
-function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIndex = -1) {
-  // If header is at row 0, there's no period text row; data starts at row 1
-  const periodText = headerIndex === 0 ? '' : String(rows[0]?.[1] || '');
-  const soldAt = periodEndDate(periodText) || monthEnd(fallbackMonth);
-  const salesMonth = `${soldAt.slice(0, 7)}-01`;
-  const salesRows: Row[] = [];
-  const storeTotals = new Map<string, Row>();
-  let currentProduct: Row | null = null;
-  // When header is at row 0, data starts at row 1; otherwise skip 3 metadata rows
-  const dataStart = headerIndex >= 0 ? headerIndex + 1 : 3;
-  // When header is first row, file has product-line summary rows that must be skipped
-  const hasCategoryRows = headerIndex === 0;
+const STORE_HEADER_RE = /^(A\d{3}|E\d{3}|000\d{3})\s+/;
+const SKU_PREFIX_RE   = /^[A-Za-z]{2}\d/;
 
-  const accumulatingProducts = new Set<Row>();
+function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIndex = -1) {
+  const periodText = headerIndex === 0 ? '' : String(rows[0]?.[1] || '');
+  const soldAt  = periodEndDate(periodText) || monthEnd(fallbackMonth);
+  const dataStart = headerIndex >= 0 ? headerIndex + 1 : 3;
+
+  // 格式自動偵測：第一筆非空列是否為 store header
+  const isStoreFirst = (() => {
+    for (const row of rows.slice(dataStart)) {
+      const label = String(row[0] || '').trim();
+      if (!label) continue;
+      return STORE_HEADER_RE.test(label);
+    }
+    return false;
+  })();
+
+  return isStoreFirst
+    ? _parseStoreFirst(rows.slice(dataStart), soldAt)
+    : _parseProductFirst(rows.slice(dataStart), soldAt, headerIndex === 0);
+}
+
+/** 新格式（通路優先）：A### store section → 商品分類行（跳過）→ SKU 行 */
+function _parseStoreFirst(dataRows: unknown[][], soldAt: string) {
+  let currentStore: { channel: string; storeName: string } | null = null;
+  const skuTotals   = new Map<string, { name: string; quantity: number; revenue: number }>();
+  const storeTotals = new Map<string, Row>();
   const productStoreRows: Row[] = [];
 
-  for (const row of rows.slice(dataStart)) {
+  for (const row of dataRows) {
     const label = String(row[0] || '').trim();
     if (!label || label === '總計') continue;
     const quantity = parseNumber(row[1]);
-    const revenue = parseNumber(row[2]);
-    if (isStoreName(label)) {
-      if (!currentProduct || (!quantity && !revenue)) continue;
-      const channel = classifyStore(label);
-      const storeName = label.replace(/^\S+\s*/, '');
-      const key = `${channel}::${storeName}`;
-      const existing = storeTotals.get(key) || { sales_month: soldAt, channel_category: channel, store_name: storeName, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
-      existing.quantity += quantity;
-      existing.revenue += revenue;
-      storeTotals.set(key, existing);
-      productStoreRows.push({
-        sales_month: soldAt,
-        external_sku: String(currentProduct.external_sku || ''),
-        external_product_name: String(currentProduct.external_product_name || ''),
-        channel_category: channel,
-        store_name: storeName,
-        quantity,
-        revenue,
-      });
-      if (accumulatingProducts.has(currentProduct)) {
-        currentProduct.quantity += quantity;
-        currentProduct.revenue += revenue;
-      }
+    const revenue  = parseNumber(row[2]);
+
+    // store header → 新 section 開始
+    if (STORE_HEADER_RE.test(label)) {
+      const channel   = classifyStore(label);
+      const storeName = label.replace(/^\S+\s*/, '').trim();
+      currentStore = { channel, storeName };
       continue;
     }
-    // Skip product-line category summary rows (e.g. "石墨烯發熱衣BigRed", "PRO折疊套鏡")
-    // These appear in the new format and are summaries of the SKU rows that follow them.
-    // SKU rows always start with a 2-uppercase-letter + digit product code (e.g. AH1..., AS1...).
-    if (hasCategoryRows && !/^[A-Za-z]{2}\d/.test(label.split(/\s+/)[0] || '')) continue;
-    // Skip zero-revenue rows in the old format (no category rows); in the new format SKU rows
-    // may have null revenue when sales data only appears on child store rows — still track them.
+    if (!currentStore) continue;
+
+    // 商品分類行 / 子通路行（跳過）
+    const firstToken = label.split(/\s+/)[0] || '';
+    if (!SKU_PREFIX_RE.test(firstToken)) continue;
+    if (!quantity && !revenue) continue;
+
+    // 個別 SKU 行
+    const sku  = firstToken.toUpperCase();
+    const name = (sku + ' ' + label.split(/\s+/).slice(1).join(' ')).trim();
+    const { channel, storeName } = currentStore;
+
+    // 跨門市 SKU 彙總 → sales_records
+    const prev = skuTotals.get(sku) ?? { name, quantity: 0, revenue: 0 };
+    prev.quantity += quantity;
+    prev.revenue  += revenue;
+    skuTotals.set(sku, prev);
+
+    // 門市彙總 → channel_store_sales_records
+    const storeKey = `${channel}::${storeName}`;
+    const storeRow = storeTotals.get(storeKey) ?? { sales_month: soldAt, channel_category: channel, store_name: storeName, quantity: 0, revenue: 0 };
+    storeRow.quantity += quantity;
+    storeRow.revenue  += revenue;
+    storeTotals.set(storeKey, storeRow);
+
+    // SKU × 門市明細 → product_store_sales
+    productStoreRows.push({ sales_month: soldAt, external_sku: sku, external_product_name: name, channel_category: channel, store_name: storeName, quantity, revenue });
+  }
+
+  const salesRows: Row[] = [...skuTotals.entries()]
+    .filter(([, v]) => v.quantity || v.revenue)
+    .map(([sku, v]) => ({ product_id: null, external_sku: sku, external_product_name: v.name, sold_at: soldAt, quantity: v.quantity, revenue: v.revenue, channel: '全通路', notes: '各部門業績明細匯入' }));
+
+  // product_store_rows 去重合併：同一 SKU × 門市在 Excel 出現多次時加總
+  const psAgg = new Map<string, Row>();
+  for (const r of productStoreRows) {
+    const k = `${r.external_sku}::${r.channel_category}::${r.store_name}`;
+    const e = psAgg.get(k);
+    if (!e) { psAgg.set(k, { ...r }); }
+    else { e.quantity = Number(e.quantity ?? 0) + Number(r.quantity ?? 0); e.revenue = Number(e.revenue ?? 0) + Number(r.revenue ?? 0); }
+  }
+  const dedupedProductStoreRows = [...psAgg.values()];
+
+  const storeRows = [...storeTotals.values()];
+  const channelRows = Object.values(storeRows.reduce((acc, row) => {
+    const key = String(row.channel_category);
+    acc[key] ??= { sales_month: soldAt, channel_category: key, quantity: 0, revenue: 0 };
+    acc[key].quantity += Number(row.quantity ?? 0);
+    acc[key].revenue  += Number(row.revenue  ?? 0);
+    return acc;
+  }, {} as Record<string, Row>));
+
+  return { salesRows, channelRows, storeRows, productStoreRows: dedupedProductStoreRows };
+}
+
+/** 舊格式（商品優先）：SKU 行在外層，門市 sub-row（A### / E### / 000###）在底下 */
+function _parseProductFirst(dataRows: unknown[][], soldAt: string, hasCategoryRows: boolean) {
+  const salesRows: Row[] = [];
+  const storeTotals = new Map<string, Row>();
+  let currentProduct: Row | null = null;
+  const accumulatingProducts = new Set<Row>();
+  const productStoreRows: Row[] = [];
+
+  for (const row of dataRows) {
+    const label = String(row[0] || '').trim();
+    if (!label || label === '總計') continue;
+    const quantity = parseNumber(row[1]);
+    const revenue  = parseNumber(row[2]);
+
+    if (STORE_HEADER_RE.test(label)) {
+      if (!currentProduct || (!quantity && !revenue)) continue;
+      const channel   = classifyStore(label);
+      const storeName = label.replace(/^\S+\s*/, '');
+      const key = `${channel}::${storeName}`;
+      const existing = storeTotals.get(key) || { sales_month: soldAt, channel_category: channel, store_name: storeName, quantity: 0, revenue: 0 };
+      existing.quantity += quantity;
+      existing.revenue  += revenue;
+      storeTotals.set(key, existing);
+      productStoreRows.push({ sales_month: soldAt, external_sku: String(currentProduct.external_sku || ''), external_product_name: String(currentProduct.external_product_name || ''), channel_category: channel, store_name: storeName, quantity, revenue });
+      if (accumulatingProducts.has(currentProduct)) { currentProduct.quantity += quantity; currentProduct.revenue += revenue; }
+      continue;
+    }
+    if (hasCategoryRows && !SKU_PREFIX_RE.test(label.split(/\s+/)[0] || '')) continue;
     if (!hasCategoryRows && !quantity && !revenue) continue;
+
     const skuParts = label.split(/\s+/);
     const sku = (skuParts[0] || '').toUpperCase();
     const productName = (sku + ' ' + skuParts.slice(1).join(' ')).trim();
-    currentProduct = {
-      product_id: null,
-      external_sku: sku,
-      external_product_name: productName,
-      sold_at: soldAt,
-      quantity,
-      revenue,
-      channel: '全通路',
-      notes: '各部門業績明細匯入',
-    };
+    currentProduct = { product_id: null, external_sku: sku, external_product_name: productName, sold_at: soldAt, quantity, revenue, channel: '全通路', notes: '各部門業績明細匯入' };
     if (!quantity && !revenue) accumulatingProducts.add(currentProduct);
     salesRows.push(currentProduct);
   }
 
   const storeRows = [...storeTotals.values()];
   const channelRows = Object.values(storeRows.reduce((acc, row) => {
-    const key = row.channel_category;
-    acc[key] ??= { sales_month: soldAt, channel_category: key, quantity: 0, revenue: 0, source_name: '各部門業績明細匯入' };
+    const key = String(row.channel_category);
+    acc[key] ??= { sales_month: soldAt, channel_category: key, quantity: 0, revenue: 0 };
     acc[key].quantity += Number(row.quantity ?? 0);
-    acc[key].revenue += Number(row.revenue ?? 0);
+    acc[key].revenue  += Number(row.revenue  ?? 0);
     return acc;
   }, {} as Record<string, Row>));
+
   return { salesRows: salesRows.filter((r) => r.quantity || r.revenue), channelRows, storeRows, productStoreRows };
 }
 
