@@ -1914,6 +1914,12 @@ function classifyInventoryLocation(loc: string): string {
   return '街邊店';
 }
 
+/** 尺寸序號對照表（末碼數字 → 尺碼標籤） */
+const SIZE_MAP: Record<string, string> = {
+  '9': 'XXS', '0': 'XS', '1': 'S', '2': 'M', '3': 'L',
+  '4': 'XL', '5': '2L', '6': '3L', '7': '4L', '8': '5L',
+};
+
 /** 顏色代碼對照表（2 碼英文 → 中文） */
 const COLOR_MAP: Record<string, string> = {
   BK: '黑', WT: '白', WH: '白', RD: '紅', BL: '藍',
@@ -1936,7 +1942,8 @@ function parseSkuColorSize(sku: string, name: string): { color: string; size: st
   if (concatMatch) {
     const colorCode = concatMatch[1];
     const color = COLOR_MAP[colorCode] ?? colorCode;
-    return { color, size: concatMatch[2] };
+    const size = SIZE_MAP[concatMatch[2]] ?? concatMatch[2];
+    return { color, size };
   }
 
   // 格式 2：破折號分隔 BASE-COLOR-SIZE
