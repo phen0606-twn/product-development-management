@@ -2362,6 +2362,44 @@ function InventoryPage() {
   }, [chartData, trimSearch]);
   const visibleMerged = showAll ? filteredMerged : filteredMerged.slice(0, 15);
 
+  async function exportInventoryExcel() {
+    const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
+    const nameMap = new Map(currentBySku.map((r) => [String(r.external_sku), String(r.product_name || r.external_sku)]));
+
+    const dataRows: unknown[][] = [['SKU', '品名', '顏色', '尺寸', '庫存量', '門市名稱']];
+
+    if (storeFilter) {
+      // 已選擇特定門市：直接用 storeSkuDetail
+      for (const d of storeSkuDetail) {
+        dataRows.push([d.sku, d.productName || '-', d.color, d.size, d.quantity, storeFilter]);
+      }
+    } else {
+      // 全部門市：展開為每筆 SKU × 門市
+      const expanded: unknown[][] = [];
+      for (const [sku, locs] of skuLocations) {
+        if (!matchedSkusForStore.has(sku)) continue;
+        const name = nameMap.get(sku) || sku;
+        const productName = name.startsWith(sku) ? name.slice(sku.length).trim() : name;
+        const { color, size } = parseSkuColorSize(sku, name);
+        for (const { location, quantity } of locs) {
+          if (quantity <= 0) continue;
+          expanded.push([sku, productName, color, size, quantity, location]);
+        }
+      }
+      expanded.sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'zh-TW'));
+      dataRows.push(...expanded);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(dataRows);
+    // 欄寬
+    ws['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 8 }, { wch: 6 }, { wch: 8 }, { wch: 20 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '庫存明細');
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const storeName = storeFilter || '全部門市';
+    XLSX.writeFile(wb, `庫存明細_${storeName}_${today}.xlsx`);
+  }
+
   async function save(data: Row) {
     if (!supabase) return;
     const payload = {
@@ -2535,9 +2573,18 @@ function InventoryPage() {
             {/* SKU 庫存明細表 */}
             {storeSkuDetail.length > 0 && (
               <div className="mb-5">
-                <p className="mb-2 text-xs font-medium text-slate-500">
-                  庫存明細（共 {storeSkuDetail.length} 個款式）
-                </p>
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-xs font-medium text-slate-500">
+                    庫存明細（共 {storeSkuDetail.length} 個款式）
+                  </p>
+                  <button
+                    type="button"
+                    onClick={exportInventoryExcel}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-leaf px-3 py-1 text-xs font-medium text-leaf hover:bg-leaf hover:text-white transition-colors"
+                  >
+                    ↓ 匯出 Excel
+                  </button>
+                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
