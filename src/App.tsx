@@ -1914,23 +1914,46 @@ function classifyInventoryLocation(loc: string): string {
   return '街邊店';
 }
 
-/** 從 SKU 或商品名稱中解析顏色與尺寸。
- *  支援：「AS1SE-黑色-M」「AS1SE 黑色 M」「AS1SE黑色M」等格式。 */
-function parseSkuColorSize(sku: string, name: string): { color: string; size: string } {
-  const sizeRe = /^(ONESIZE|FREE|OS|XXL|XL|2XL|3XL|XS|[SML]|\d{2,3}(?:cm|號)?)$/i;
+/** 顏色代碼對照表（2 碼英文 → 中文） */
+const COLOR_MAP: Record<string, string> = {
+  BK: '黑', WT: '白', WH: '白', RD: '紅', BL: '藍',
+  NV: '深藍', GR: '綠', GY: '灰', PK: '粉', BE: '米',
+  BR: '棕', YL: '黃', OR: '橙', PP: '紫', CR: '奶油',
+  LB: '淺藍', LG: '淺綠', PR: '紫', LV: '薰衣草',
+};
 
-  // 嘗試 SKU 以「-」分隔：BASE-COLOR-SIZE
-  const dashParts = sku.split('-');
-  if (dashParts.length >= 3 && sizeRe.test(dashParts[dashParts.length - 1])) {
-    return { color: dashParts.slice(1, -1).join('-'), size: dashParts[dashParts.length - 1].toUpperCase() };
+/** 從 SKU 或商品名稱中解析顏色與尺寸。
+ *  支援格式：
+ *   1. 連接式：AS1SE0004WT4 → 末尾 2 大寫英文(顏色) + 1 數字(尺寸)
+ *   2. 破折號：AS1SE-黑色-M → BASE-COLOR-SIZE
+ *   3. 空白：AS1SE 黑色 M → 取最後一個尺寸 token */
+function parseSkuColorSize(sku: string, name: string): { color: string; size: string } {
+  const sizeWordRe = /^(ONESIZE|FREE|OS|XXL|XL|2XL|3XL|XS|[SML]|\d{2,3}(?:cm|號)?)$/i;
+
+  // 格式 1：末尾「2 大寫英文 + 1 數字」→ 顏色代碼 + 尺寸序號
+  // 例：AS1SE0004WT4 → color=WT(白), size=4
+  const concatMatch = sku.match(/^.+([A-Z]{2})(\d)$/);
+  if (concatMatch) {
+    const colorCode = concatMatch[1];
+    const color = COLOR_MAP[colorCode] ?? colorCode;
+    return { color, size: concatMatch[2] };
   }
 
-  // 嘗試商品名稱，取最後一個符合尺寸的 token
+  // 格式 2：破折號分隔 BASE-COLOR-SIZE
+  const dashParts = sku.split('-');
+  if (dashParts.length >= 3 && sizeWordRe.test(dashParts[dashParts.length - 1])) {
+    const colorRaw = dashParts.slice(1, -1).join('-');
+    const color = COLOR_MAP[colorRaw.toUpperCase()] ?? colorRaw;
+    return { color, size: dashParts[dashParts.length - 1].toUpperCase() };
+  }
+
+  // 格式 3：商品名稱空白分隔，取最後一個尺寸 token
   const tokens = name.split(/[\s\-　]+/).filter(Boolean);
   for (let i = tokens.length - 1; i >= 1; i--) {
-    if (sizeRe.test(tokens[i])) {
-      const colorTokens = tokens.slice(1, i); // 去掉第一個 token（通常是 SKU）
-      return { color: colorTokens.join('') || '-', size: tokens[i].toUpperCase() };
+    if (sizeWordRe.test(tokens[i])) {
+      const colorRaw = tokens.slice(1, i).join('');
+      const color = COLOR_MAP[colorRaw.toUpperCase()] ?? (colorRaw || '-');
+      return { color, size: tokens[i].toUpperCase() };
     }
   }
 
