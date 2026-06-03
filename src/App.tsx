@@ -1914,6 +1914,29 @@ function classifyInventoryLocation(loc: string): string {
   return '街邊店';
 }
 
+/** 從 SKU 或商品名稱中解析顏色與尺寸。
+ *  支援：「AS1SE-黑色-M」「AS1SE 黑色 M」「AS1SE黑色M」等格式。 */
+function parseSkuColorSize(sku: string, name: string): { color: string; size: string } {
+  const sizeRe = /^(ONESIZE|FREE|OS|XXL|XL|2XL|3XL|XS|[SML]|\d{2,3}(?:cm|號)?)$/i;
+
+  // 嘗試 SKU 以「-」分隔：BASE-COLOR-SIZE
+  const dashParts = sku.split('-');
+  if (dashParts.length >= 3 && sizeRe.test(dashParts[dashParts.length - 1])) {
+    return { color: dashParts.slice(1, -1).join('-'), size: dashParts[dashParts.length - 1].toUpperCase() };
+  }
+
+  // 嘗試商品名稱，取最後一個符合尺寸的 token
+  const tokens = name.split(/[\s\-　]+/).filter(Boolean);
+  for (let i = tokens.length - 1; i >= 1; i--) {
+    if (sizeRe.test(tokens[i])) {
+      const colorTokens = tokens.slice(1, i); // 去掉第一個 token（通常是 SKU）
+      return { color: colorTokens.join('') || '-', size: tokens[i].toUpperCase() };
+    }
+  }
+
+  return { color: '-', size: '-' };
+}
+
 function InventoryPage() {
   const inventory = useRows('inventory_records', 'recorded_at');
   const sales = useRows('sales_records', 'sold_at');
@@ -2244,6 +2267,27 @@ function InventoryPage() {
     });
   }, [selectedTrendStore, matchedSkusForStore, productStoreSales.rows]);
 
+  // 查詢結果：各 SKU 庫存量（依搜尋 + 門市篩選）
+  const storeSkuDetail = useMemo(() => {
+    if (matchedSkusForStore.size === 0) return [];
+    const nameMap = new Map(currentBySku.map((r) => [String(r.external_sku), String(r.product_name || r.external_sku)]));
+    const result: { sku: string; name: string; color: string; size: string; quantity: number }[] = [];
+    for (const [sku, locs] of skuLocations) {
+      if (!matchedSkusForStore.has(sku)) continue;
+      let qty = 0;
+      for (const { location, quantity } of locs) {
+        if (storeFilter && location !== storeFilter) continue;
+        qty += quantity;
+      }
+      if (qty > 0) {
+        const name = nameMap.get(sku) || sku;
+        const { color, size } = parseSkuColorSize(sku, name);
+        result.push({ sku, name, color, size, quantity: qty });
+      }
+    }
+    return result.sort((a, b) => b.quantity - a.quantity);
+  }, [matchedSkusForStore, skuLocations, storeFilter, currentBySku]);
+
   // 選定門市後：各 SKU 在該門市的庫存明細
   const storeInvDetail = useMemo(() => {
     if (!selectedTrendStore || matchedSkusForStore.size === 0) return [];
@@ -2451,7 +2495,48 @@ function InventoryPage() {
               </ResponsiveContainer>
             </div>
 
-            {/* 數字表格 */}
+            {/* SKU 庫存明細表 */}
+            {storeSkuDetail.length > 0 && (
+              <div className="mb-5">
+                <p className="mb-2 text-xs font-medium text-slate-500">
+                  庫存明細（共 {storeSkuDetail.length} 個款式）
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-xs text-slate-400">
+                        <th className="pb-2 text-left font-medium">SKU</th>
+                        <th className="pb-2 text-left font-medium">顏色</th>
+                        <th className="pb-2 text-left font-medium">尺寸</th>
+                        <th className="pb-2 text-right font-medium">庫存量</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {storeSkuDetail.map((d) => (
+                        <tr key={d.sku} className="hover:bg-slate-50">
+                          <td className="py-2 pr-4 font-mono text-xs text-slate-500">{d.sku}</td>
+                          <td className="py-2 pr-4 text-slate-600">{d.color}</td>
+                          <td className="py-2 pr-4 text-slate-600">{d.size}</td>
+                          <td className="py-2 text-right tabular-nums font-semibold text-slate-700">
+                            {d.quantity.toLocaleString('zh-TW')} 件
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-200 bg-slate-50">
+                        <td colSpan={3} className="py-2 font-semibold text-slate-600">合計</td>
+                        <td className="py-2 text-right tabular-nums font-bold text-slate-800">
+                          {storeSkuDetail.reduce((s, d) => s + d.quantity, 0).toLocaleString('zh-TW')} 件
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 各門市庫存分佈 */}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
