@@ -1925,7 +1925,7 @@ const COLOR_MAP: Record<string, string> = {
   BK: '黑', WT: '白', PK: '粉', GN: '綠', YL: '黃',
   PL: '紫', RD: '紅', BN: '咖/棕', GY: '灰', CO: '膚',
   KK: '卡其', RB: '彩虹', MC: '迷彩', LP: '豹紋', NO: '無分色',
-  OG: '橘', GD: '金', SV: '銀', MIX: '混色', BL: '藍',
+  OG: '橘', GD: '金', SV: '銀', MIX: '混色', BL: '藍', TO: '玳瑁',
 };
 
 /** 從 SKU 或商品名稱中解析顏色與尺寸。
