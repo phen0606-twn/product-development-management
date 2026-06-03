@@ -2317,7 +2317,9 @@ function InventoryPage() {
       if (qty > 0) {
         const name = nameMap.get(sku) || sku;
         const { color, size } = parseSkuColorSize(sku, name);
-        result.push({ sku, name, color, size, quantity: qty });
+        // 品名：去除 SKU 前綴（若 product_name 以 SKU 開頭）
+        const productName = name.startsWith(sku) ? name.slice(sku.length).trim() : name;
+        result.push({ sku, name, productName, color, size, quantity: qty });
       }
     }
     return result.sort((a, b) => b.quantity - a.quantity);
@@ -2541,6 +2543,7 @@ function InventoryPage() {
                     <thead>
                       <tr className="border-b border-slate-100 text-xs text-slate-400">
                         <th className="pb-2 text-left font-medium">SKU</th>
+                        <th className="pb-2 text-left font-medium">品名</th>
                         <th className="pb-2 text-left font-medium">顏色</th>
                         <th className="pb-2 text-left font-medium">尺寸</th>
                         <th className="pb-2 text-right font-medium">庫存量</th>
@@ -2550,6 +2553,7 @@ function InventoryPage() {
                       {storeSkuDetail.map((d) => (
                         <tr key={d.sku} className="hover:bg-slate-50">
                           <td className="py-2 pr-4 font-mono text-xs text-slate-500">{d.sku}</td>
+                          <td className="py-2 pr-4 text-slate-700">{d.productName || '-'}</td>
                           <td className="py-2 pr-4 text-slate-600">{d.color}</td>
                           <td className="py-2 pr-4 text-slate-600">{d.size}</td>
                           <td className="py-2 text-right tabular-nums font-semibold text-slate-700">
@@ -2560,7 +2564,7 @@ function InventoryPage() {
                     </tbody>
                     <tfoot>
                       <tr className="border-t-2 border-slate-200 bg-slate-50">
-                        <td colSpan={3} className="py-2 font-semibold text-slate-600">合計</td>
+                        <td colSpan={4} className="py-2 font-semibold text-slate-600">合計</td>
                         <td className="py-2 text-right tabular-nums font-bold text-slate-800">
                           {storeSkuDetail.reduce((s, d) => s + d.quantity, 0).toLocaleString('zh-TW')} 件
                         </td>
