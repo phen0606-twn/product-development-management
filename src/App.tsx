@@ -92,21 +92,21 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-mist lg:grid lg:grid-cols-[238px_1fr]">
-      <aside className="border-r border-navydark/40 bg-navy p-5">
+      <aside className="border-r border-white/10 bg-navy p-5">
         <h1 className="text-lg font-semibold text-white">商品開發管理</h1>
-        <p className="mt-1 text-xs text-white/60">防曬 / 天氣商品開發系統</p>
-        <nav className="mt-6 space-y-1">
+        <p className="mt-1 text-xs text-white/55">防曬 / 天氣商品開發系統</p>
+        <nav className="mt-6 space-y-0.5">
           {nav.filter(([to, , , adminOnly]) => !(isViewer && adminOnly)).map(([to, label, Icon]) => (
-            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm ${isActive ? 'bg-leaf text-white shadow-sm' : 'text-white/75 hover:bg-white/10 hover:text-white'}`}>
-              <Icon className="h-4 w-4" />
+            <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${isActive ? 'bg-leaf text-white font-medium' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+              <Icon className="h-4 w-4 shrink-0" />
               {label}
             </NavLink>
           ))}
         </nav>
         {email && (
-          <div className="mt-8">
+          <div className="mt-8 border-t border-white/10 pt-4">
             {isViewer && <span className="mb-2 block rounded-md bg-white/10 px-2 py-1 text-center text-xs text-white/70">檢視者</span>}
-            <button onClick={() => supabase?.auth.signOut()} className="text-left text-xs text-white/50 hover:text-white/80">登出<br />{email}</button>
+            <button onClick={() => supabase?.auth.signOut()} className="text-left text-xs text-white/45 hover:text-white/75 transition-colors">登出<br />{email}</button>
           </div>
         )}
       </aside>
@@ -1538,23 +1538,25 @@ function skuToLabel(sku: string): string {
 }
 
 // ─── Chart style constants (.claude/skills/chart-style/SKILL.md) ─────────────
-const CHART_PRIMARY    = '#E8705A';
-const CHART_SECONDARY  = '#F4A090';
-const CHART_GRID       = '#f1f5f9';
-const CHART_TICK       = { fontSize: 11, fill: '#94a3b8' } as const;
-const CHART_TICK_MD    = { fontSize: 12, fill: '#94a3b8' } as const;
-const CHART_TOOLTIP    = { borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 } as const;
+const CHART_PRIMARY    = '#572A87';   // Purple
+const CHART_SECONDARY  = '#86B926';   // Dark Lemon Lime
+const CHART_GRID       = '#f0ecf7';
+const CHART_TICK       = { fontSize: 11, fill: '#9b8bae' } as const;
+const CHART_TICK_MD    = { fontSize: 12, fill: '#9b8bae' } as const;
+const CHART_TOOLTIP    = { borderRadius: 8, border: '1px solid #e2d9f3', fontSize: 12 } as const;
 const CHART_LEGEND     = { fontSize: 12 } as const;
 const CHART_MARGIN     = { top: 4, right: 16, left: 0, bottom: 0 } as const;
 const CHART_STROKE_W   = 2.5;
 const CHART_ACTIVE_DOT = { r: 6 } as const;
+// 多數列圖表調色盤（依序使用）
+const CHART_PALETTE    = ['#572A87', '#86B926', '#984696', '#3E651C', '#9DD0E0', '#C5AAE1'] as const;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CHANNEL_COLORS: Record<string, string> = {
-  '網路官網／平台': '#E8705A',
-  '街邊店': '#F4A090',
-  '捷運門市': '#fddf98',
-  '加盟門市': '#4ECDC4',
+  '網路官網／平台': '#572A87',   // Purple
+  '街邊店':        '#86B926',   // Lemon Lime
+  '捷運門市':      '#984696',   // Plum
+  '加盟門市':      '#3E651C',   // Dark Moss Green
 };
 
 function ChannelAnalysisPage() {
@@ -3324,8 +3326,22 @@ function ActionButtons({ onEdit, onDelete }: { onEdit: () => void; onDelete: () 
   return <div className="flex gap-2"><button onClick={onEdit} className="rounded-md border border-slate-200 p-2 text-slate-600" title="重新編輯"><Pencil className="h-4 w-4" /></button><button onClick={onDelete} className="rounded-md border border-slate-200 p-2 text-coral" title="刪除"><Trash2 className="h-4 w-4" /></button></div>;
 }
 
-function Card({ label, value, helper, compact, tone = 'ink' }: { label: string; value: string; helper?: string; compact?: boolean; tone?: 'ink' | 'coral' }) {
-  return <section className={`rounded-lg border border-slate-200 bg-white ${compact ? 'p-4' : 'p-5'} shadow-soft`}><p className="text-sm text-slate-500">{label}</p><p className={`${compact ? 'text-lg' : 'text-2xl'} mt-1 font-semibold ${tone === 'coral' ? 'text-coral' : 'text-ink'}`}>{value}</p>{helper && <p className="mt-1 text-xs text-slate-500">{helper}</p>}</section>;
+function Card({ label, value, helper, compact, tone = 'ink' }: { label: string; value: string; helper?: string; compact?: boolean; tone?: 'ink' | 'coral' | 'lime' | 'moss' }) {
+  const bgCls  = tone === 'coral' ? 'bg-coral/20 border-coral/30'
+               : tone === 'lime'  ? 'bg-lime/10  border-lime/30'
+               : tone === 'moss'  ? 'bg-moss/10  border-moss/30'
+               : 'bg-white border-slate-200';
+  const valCls = tone === 'coral' ? 'text-leaf'
+               : tone === 'lime'  ? 'text-sun'
+               : tone === 'moss'  ? 'text-moss'
+               : 'text-ink';
+  return (
+    <section className={`rounded-lg border ${bgCls} ${compact ? 'p-4' : 'p-5'} shadow-soft`}>
+      <p className="text-sm text-slate-500">{label}</p>
+      <p className={`${compact ? 'text-lg' : 'text-2xl'} mt-1 font-semibold ${valCls}`}>{value}</p>
+      {helper && <p className="mt-1 text-xs text-slate-500">{helper}</p>}
+    </section>
+  );
 }
 
 function Table({ columns, children }: { columns: string[]; children: React.ReactNode }) {
