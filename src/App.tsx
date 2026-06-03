@@ -2244,6 +2244,22 @@ function InventoryPage() {
     });
   }, [selectedTrendStore, matchedSkusForStore, productStoreSales.rows]);
 
+  // 選定門市後：各 SKU 在該門市的庫存明細
+  const storeInvDetail = useMemo(() => {
+    if (!selectedTrendStore || matchedSkusForStore.size === 0) return [];
+    const nameMap = new Map(currentBySku.map((r) => [String(r.external_sku), String(r.product_name || r.external_sku)]));
+    const result: { sku: string; name: string; quantity: number }[] = [];
+    for (const [sku, locs] of skuLocations) {
+      if (!matchedSkusForStore.has(sku)) continue;
+      for (const { location, quantity } of locs) {
+        if (location === selectedTrendStore && quantity > 0) {
+          result.push({ sku, name: nameMap.get(sku) || sku, quantity });
+        }
+      }
+    }
+    return result.sort((a, b) => b.quantity - a.quantity);
+  }, [selectedTrendStore, matchedSkusForStore, skuLocations, currentBySku]);
+
   // ── end 門市庫存查詢 ──────────────────────────────────────────────────────────
 
   const reorderAlerts = useMemo(() => {
@@ -2505,6 +2521,50 @@ function InventoryPage() {
                     ✕ 收起
                   </button>
                 </div>
+                {/* 庫存明細 */}
+                {storeInvDetail.length > 0 && (
+                  <div className="mb-4">
+                    <p className="mb-2 text-xs font-medium text-slate-500">庫存明細</p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-100 text-slate-400">
+                            <th className="pb-1.5 text-left font-medium">SKU</th>
+                            <th className="pb-1.5 text-left font-medium">商品名稱</th>
+                            <th className="pb-1.5 text-right font-medium">庫存量</th>
+                            <th className="pb-1.5 text-right font-medium">佔該門市%</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {storeInvDetail.map((d) => {
+                            const detailTotal = storeInvDetail.reduce((s, r) => s + r.quantity, 0);
+                            const pct = detailTotal > 0 ? d.quantity / detailTotal * 100 : 0;
+                            return (
+                              <tr key={d.sku} className="hover:bg-white/60">
+                                <td className="py-1.5 pr-3 font-mono text-slate-400">{d.sku}</td>
+                                <td className="py-1.5 pr-3 text-slate-600">{d.name}</td>
+                                <td className="py-1.5 text-right font-semibold tabular-nums text-slate-700">{d.quantity.toLocaleString('zh-TW')} 件</td>
+                                <td className="py-1.5 text-right tabular-nums text-slate-400">{pct.toFixed(1)}%</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t border-slate-200">
+                            <td colSpan={2} className="py-1.5 font-semibold text-slate-600">合計</td>
+                            <td className="py-1.5 text-right font-semibold tabular-nums text-slate-700">
+                              {storeInvDetail.reduce((s, r) => s + r.quantity, 0).toLocaleString('zh-TW')} 件
+                            </td>
+                            <td className="py-1.5 text-right text-slate-400">100%</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 近3個月銷售趨勢 */}
+                <p className="mb-2 text-xs font-medium text-slate-500">近 3 個月銷售趨勢</p>
                 {storeSalesTrend.every((d) => d.quantity === 0) ? (
                   <p className="py-4 text-center text-xs text-slate-400">此門市無對應銷售記錄</p>
                 ) : (
