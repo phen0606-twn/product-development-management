@@ -53,6 +53,12 @@ const CHANNEL_COLORS: Record<string, string> = {
 
 ## 圖表類型規範
 
+### 圓餅圖 / 甜甜圈圖（Conic Gradient Donut）
+- 使用 CSS `conic-gradient` 實作（非 Recharts PieChart）
+- 顏色依通路名稱對應 `CHANNEL_COLORS`，未知通路 fallback 用 `CHART_PALETTE[i]`
+- 色環順序依 CHANNELS 陣列：網路官網／平台 → 街邊店 → 捷運門市 → 加盟門市
+- 中心白圓（h-28 w-28）顯示總業績金額
+
 ### 折線圖（LineChart）
 - 套件：Recharts `LineChart` + `ResponsiveContainer`
 - 高度：單一數列 240px；多數列 260px

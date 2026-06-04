@@ -1058,7 +1058,7 @@ function CostsPage() {
                       {dueStatus === 'soon' && <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700">即將到期</span>}
                     </td>
                     <td className="p-3 text-sm">{products.rows.find((p) => p.id === row.product_id)?.name || '-'}</td>
-                    <td className="p-3 text-sm">{row.custom_type || row.type}</td>
+                    <td className="p-3 text-sm">{row.custom_type || costTypeLabel(row.type)}</td>
                     <td className="p-3 text-sm">{row.description || '-'}</td>
                     <td className="p-3 text-sm">{formatCurrency(totalTWD)}</td>
                     <td className="p-3 text-sm text-green-600">{formatCurrency(paidTWD)}</td>
@@ -1078,7 +1078,7 @@ function CostsPage() {
           <tr key={row.id} className="border-t align-top">
             <td className="p-3">{row.paid_at}</td>
             <td className="p-3">{products.rows.find((p) => p.id === row.product_id)?.name}</td>
-            <td className="p-3">{row.custom_type || row.type}</td>
+            <td className="p-3">{row.custom_type || costTypeLabel(row.type)}</td>
             <td className="p-3">{row.description}</td>
             <td className="p-3">{row.currency} {Number(row.amount ?? 0).toLocaleString('zh-TW')}</td>
             <td className="p-3">{row.exchange_rate_to_twd}</td>
@@ -3472,11 +3472,11 @@ function Summary({ title, rows, valueLabel }: { title: string; rows: Array<{ lab
 }
 
 function ChannelSummary({ rows }: { rows: Array<{ label: string; quantity: number; revenue: number }> }) {
-  const colors = ['#fd5e4b', '#fecf00', '#fd8391', '#fddf98', '#fedbdf'];
+  const getColor = (label: string, i: number) => CHANNEL_COLORS[label] ?? CHART_PALETTE[i % CHART_PALETTE.length];
   const total = sum(rows, 'revenue');
   let cursor = 0;
-  const gradient = rows.map((r, i) => { const start = cursor; cursor += total ? r.revenue / total * 100 : 0; return `${colors[i % colors.length]} ${start}% ${cursor}%`; }).join(', ') || '#e2e8f0 0 100%';
-  return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><h3 className="mb-4 font-semibold">通路業績</h3><div className="space-y-3">{rows.map((r, i) => <div key={r.label} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"><p><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: colors[i % colors.length] }} />{r.label}<span className="ml-2 text-slate-500">{total ? (r.revenue / total * 100).toFixed(1) : 0}%</span></p><p className="font-semibold text-leaf">{formatCurrency(r.revenue)}</p></div>)}<div className="grid gap-5 border-t pt-5 md:grid-cols-[260px_1fr] md:items-center"><div className="mx-auto grid h-60 w-60 place-items-center rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-sm"><p className="text-center text-sm font-semibold">{formatCurrency(total)}</p></div></div><div>{rows.map((r, i) => <p key={r.label} className="mb-2 text-sm"><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: colors[i % colors.length] }} />{r.label}</p>)}</div></div></div></section>;
+  const gradient = rows.map((r, i) => { const start = cursor; cursor += total ? r.revenue / total * 100 : 0; return `${getColor(r.label, i)} ${start}% ${cursor}%`; }).join(', ') || '#e2e8f0 0 100%';
+  return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><h3 className="mb-4 font-semibold">通路業績</h3><div className="space-y-3">{rows.map((r, i) => <div key={r.label} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"><p><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}<span className="ml-2 text-slate-500">{total ? (r.revenue / total * 100).toFixed(1) : 0}%</span></p><p className="font-semibold text-leaf">{formatCurrency(r.revenue)}</p></div>)}<div className="grid gap-5 border-t pt-5 md:grid-cols-[260px_1fr] md:items-center"><div className="mx-auto grid h-60 w-60 place-items-center rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-sm"><p className="text-center text-sm font-semibold">{formatCurrency(total)}</p></div></div><div>{rows.map((r, i) => <p key={r.label} className="mb-2 text-sm"><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}</p>)}</div></div></div></section>;
 }
 
 function statusText(value: string) {
