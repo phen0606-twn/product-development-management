@@ -55,6 +55,32 @@ const costTypes: [string, string][] = [
   ['final_payment', '尾款'], ['bank_fee', '手續費'], ['other', '其他'],
 ];
 
+// ── 商品分類代碼 → 中文對應表（新增分類時只需在此補充） ──────────────────────
+// 規則：正規代碼放 CATEGORY_OPTIONS；別名（複數／拼法變體）只加 CATEGORY_LABEL
+const CATEGORY_LABEL: Record<string, string> = {
+  sunglasses:  '太陽眼鏡',
+  hat:         '遮陽帽',
+  hats:        '遮陽帽',
+  clothing:    '防曬衣物',
+  clothes:     '防曬衣物',
+  accessory:   '配件',
+  accessories: '配件',
+  bag:         '包包',
+  bags:        '包包',
+};
+// 下拉選單用——只列正規代碼（不含別名）
+const CATEGORY_OPTIONS: [string, string][] = [
+  ['sunglasses', '太陽眼鏡'],
+  ['hat',        '遮陽帽'],
+  ['clothing',   '防曬衣物'],
+  ['accessory',  '配件'],
+  ['bag',        '包包'],
+];
+function categoryLabel(value: string | null | undefined): string {
+  if (!value) return '未分類';
+  return CATEGORY_LABEL[value] ?? CATEGORY_LABEL[value.toLowerCase()] ?? value;
+}
+
 export default function App() {
   const [ready, setReady] = useState(!hasSupabaseConfig);
   const [email, setEmail] = useState<string | null>(null);
@@ -526,7 +552,7 @@ function ProductsPage() {
           <tr key={row.id} className="border-t align-top">
             <td className="p-3">{row.sku}</td>
             <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link><p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p></td>
-            <td className="p-3">{row.category}</td>
+            <td className="p-3">{categoryLabel(row.category)}</td>
             <td className="p-3">{statusText(row.status)}</td>
             <td className="p-3"><LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} /></td>
             <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
@@ -667,7 +693,7 @@ function ProductDetailPage() {
   if (!product) return <Page title="商品詳情" subtitle="找不到商品"><Link className="text-leaf" to="/products">返回商品列表</Link></Page>;
 
   return (
-    <Page title={product.name} subtitle={`${product.sku || '無 SKU'} / ${product.category || '未分類'}`}>
+    <Page title={product.name} subtitle={`${product.sku || '無 SKU'} / ${categoryLabel(product.category)}`}>
       <Link to="/products" className="inline-flex w-fit items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">返回商品總表</Link>
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
@@ -1094,7 +1120,7 @@ function CostsPage() {
 
 function ProductForm({ row, vendors, onSave, onCancel }: { row: Row | null; vendors: Row[]; onSave: (data: Row) => void; onCancel: () => void }) {
   return <DataForm title={row ? '編輯商品' : '新增商品'} row={row} onSave={onSave} onCancel={onCancel} fields={[
-    ['sku', 'SKU'], ['name', '商品名稱', 'required'], ['category', '分類'], ['color', '顏色'], ['size', '尺寸'],
+    ['sku', 'SKU'], ['name', '商品名稱', 'required'], ['category', '分類', 'select', CATEGORY_OPTIONS], ['color', '顏色'], ['size', '尺寸'],
     ['season', '季節'], ['owner', '負責人'],
     ['vendor_id', '廠商', 'select', vendors.map((v) => [v.id, v.name])],
     ['status', '狀態', 'select', statusOptions.map(([v, l]) => [v, l])],
