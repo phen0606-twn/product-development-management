@@ -585,6 +585,14 @@ function ProductDetailPage() {
     acc[key].push(c);
     return acc;
   }, {});
+  // 被歸入此主商品的配件費用（product_id 不是本商品，但 attributed_to_product_id === id）
+  const attributedCosts = costs.rows.filter(
+    (c) => c.attributed_to_product_id === id && c.product_id !== id && !(c.batch_id && productBatchIds.has(c.batch_id))
+  );
+  const directTotal = productCosts.reduce((s, c) => s + costTotal(c), 0);
+  const attributedTotal = attributedCosts.reduce((s, c) => s + costTotal(c), 0);
+  const fullTotal = directTotal + attributedTotal;
+  const totalQty = productBatches.reduce((s, b) => s + (Number(b.quantity) || 0), 0);
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
@@ -601,6 +609,7 @@ function ProductDetailPage() {
       product_id: id,
       batch_id: data.batch_id || null,
       vendor_id: data.vendor_id || null,
+      attributed_to_product_id: data.attributed_to_product_id || id,
       type: data.type || null,
       custom_type: data.type === 'other' ? data.custom_type : null,
       description: data.description,
@@ -711,11 +720,17 @@ function ProductDetailPage() {
           </div>
           {product.attachment_url && <a href={product.attachment_url} target="_blank" className="mt-4 inline-block text-sm text-leaf hover:underline">開啟附件連結</a>}
         </section>
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <p className="text-sm text-slate-500">此商品總費用（台幣）</p>
-          <p className="mt-1 text-2xl font-semibold">{formatCurrency(productCosts.reduce((s, c) => s + costTotal(c), 0))}</p>
-          <p className="mt-2 text-sm text-slate-500">費用筆數：{productCosts.length}　批次數：{productBatches.length}</p>
-          <p className="mt-1 text-xs text-slate-400">各批次單位成本詳見下方明細</p>
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft space-y-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-400">完整成本（台幣）</p>
+            <p className="mt-1 text-2xl font-bold text-ink">{formatCurrency(fullTotal)}</p>
+            {totalQty > 0 && <p className="mt-1 text-sm font-semibold text-sun">單件成本 {formatCurrency(Math.round(fullTotal / totalQty))} <span className="font-normal text-slate-400">/ 件（共 {totalQty.toLocaleString('zh-TW')} 件）</span></p>}
+          </div>
+          <div className="border-t pt-3 text-sm text-slate-500 space-y-1">
+            <div className="flex justify-between"><span>直接費用（{productCosts.length} 筆）</span><span className="font-medium text-slate-700">{formatCurrency(directTotal)}</span></div>
+            {attributedTotal > 0 && <div className="flex justify-between"><span>歸入配件費用（{attributedCosts.length} 筆）</span><span className="font-medium text-moss">{formatCurrency(attributedTotal)}</span></div>}
+          </div>
+          <p className="text-xs text-slate-400">各批次明細詳見下方</p>
         </section>
       </div>
 
@@ -876,6 +891,50 @@ function ProductDetailPage() {
                 尚無費用紀錄。點擊上方「＋ 新增費用」開始記錄開發費用。
               </p>
             )}
+
+            {/* 歸入配件費用 */}
+            {attributedCosts.length > 0 && (
+              <div className="overflow-hidden rounded-lg border border-moss/30 bg-moss/5">
+                <div className="border-b border-moss/20 bg-moss/10 px-5 py-3">
+                  <p className="font-medium text-moss">歸入配件費用</p>
+                  <p className="text-xs text-moss/70 mt-0.5">以下費用屬於其他商品，但已歸屬至此商品的成本中</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[640px] text-sm">
+                    <thead className="bg-white text-slate-500">
+                      <tr className="border-b border-slate-100">
+                        {['來源商品', '類型', '說明', '台幣小計'].map((h) => (
+                          <th key={h} className="px-4 py-2.5 text-left font-medium">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {attributedCosts.map((c) => {
+                        const srcProduct = products.rows.find((p) => p.id === c.product_id);
+                        return (
+                          <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
+                            <td className="px-4 py-2.5 font-medium text-leaf">
+                              <Link to={`/products/${c.product_id}`} className="hover:underline">
+                                {srcProduct ? (srcProduct.sku ? `${srcProduct.sku} ${srcProduct.name}` : srcProduct.name) : '-'}
+                              </Link>
+                            </td>
+                            <td className="px-4 py-2.5">{c.custom_type || costTypeLabel(c.type)}</td>
+                            <td className="px-4 py-2.5 text-slate-600">{c.description || '-'}</td>
+                            <td className="px-4 py-2.5 font-semibold">{formatCurrency(costTotal(c))}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot className="border-t-2 border-moss/30 bg-moss/10">
+                      <tr>
+                        <td colSpan={3} className="px-4 py-2.5 text-right text-sm font-medium text-moss">配件費用合計</td>
+                        <td className="px-4 py-2.5 font-bold text-moss">{formatCurrency(attributedTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -1017,6 +1076,7 @@ function CostsPage() {
       product_id: data.product_id || null,
       batch_id: data.batch_id || null,
       vendor_id: data.vendor_id || null,
+      attributed_to_product_id: data.attributed_to_product_id || data.product_id || null,
       type: data.type || null,
       custom_type: data.type === 'other' ? data.custom_type : null,
       description: data.description,
@@ -1244,11 +1304,19 @@ function ProgressForm({ row, onSave, onCancel }: { row: Row | null; onSave: (dat
 }
 
 function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | null; products: Row[]; batches: Row[]; onSave: (data: Row) => void; onCancel: () => void }) {
-  const [data, setData] = useState<Row>(row ?? {});
+  const [data, setData] = useState<Row>({ ...row ?? {}, attributed_to_product_id: row?.attributed_to_product_id ?? row?.product_id ?? '' });
   const [addingProduct, setAddingProduct] = useState(false);
   const [newProductName, setNewProductName] = useState('');
   const [newProductSku, setNewProductSku] = useState('');
   const [saving, setSaving] = useState(false);
+  const [attrSearch, setAttrSearch] = useState(() => {
+    const p = products.find(x => x.id === (row?.attributed_to_product_id ?? row?.product_id));
+    return p ? `${p.sku ? p.sku + ' ' : ''}${p.name}` : '';
+  });
+  const [attrOpen, setAttrOpen] = useState(false);
+  const attrFiltered = attrSearch.trim()
+    ? products.filter((p) => `${p.sku ?? ''} ${p.name ?? ''}`.toLowerCase().includes(attrSearch.toLowerCase()))
+    : products;
 
   async function createProduct() {
     if (!newProductName.trim() || !supabase) return;
@@ -1327,6 +1395,35 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
         {[['paid_at', '付款日'], ['due_date', '到期日']].map(([key, label]) => (
           <label key={key} className="text-sm">{label}<input type="date" value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
         ))}
+
+        {/* 歸屬主商品 */}
+        <label className="text-sm md:col-span-3">
+          <span>歸屬主商品</span>
+          <span className="ml-2 text-xs text-slate-400">此費用要計入哪個主商品的成本？預設與「商品」相同，配件費用可改選主商品</span>
+          <div className="relative mt-1">
+            <input
+              value={attrSearch}
+              onChange={(e) => { setAttrSearch(e.target.value); setAttrOpen(true); setData({ ...data, attributed_to_product_id: '' }); }}
+              onFocus={() => setAttrOpen(true)}
+              placeholder="搜尋商品名稱或 SKU…"
+              className="w-full rounded-md border px-3 py-2 text-sm"
+            />
+            {attrOpen && attrFiltered.length > 0 && (
+              <div className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                <button type="button" onClick={() => { setAttrSearch(''); setData({ ...data, attributed_to_product_id: '' }); setAttrOpen(false); }} className="w-full px-3 py-2 text-left text-sm text-slate-400 hover:bg-slate-50">— 不指定（與上方商品相同）</button>
+                {attrFiltered.slice(0, 20).map((p) => (
+                  <button key={p.id} type="button" onClick={() => { setAttrSearch(`${p.sku ? p.sku + ' ' : ''}${p.name}`); setData({ ...data, attributed_to_product_id: p.id }); setAttrOpen(false); }}
+                    className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-50 ${data.attributed_to_product_id === p.id ? 'bg-lime/10 font-semibold' : ''}`}>
+                    {p.sku && <span className="mr-2 font-mono text-xs text-slate-400">{p.sku}</span>}{p.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {data.attributed_to_product_id && data.attributed_to_product_id !== data.product_id && (
+            <p className="mt-1 text-xs text-moss">✓ 此費用將歸入主商品「{products.find(p => p.id === data.attributed_to_product_id)?.name}」的完整成本</p>
+          )}
+        </label>
 
         <label className="text-sm md:col-span-3">備註<textarea value={data.notes ?? ''} onChange={(e) => setData({ ...data, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" rows={2} /></label>
       </div>
