@@ -474,6 +474,8 @@ function ProductsPage() {
   const vendors = useRows('vendors');
   const progress = useRows('development_progress');
   const events = useRows('development_events');
+  const costs = useRows('development_costs');
+  const batches = useRows('product_batches', 'ordered_at');
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
@@ -483,6 +485,26 @@ function ProductsPage() {
     filterVendor ? products.rows.filter((p) => p.vendor_id === filterVendor) : products.rows,
     [products.rows, filterVendor],
   );
+
+  // 完整單位成本 = (直接費用 + 歸入配件費用) ÷ 總訂購數量
+  const unitCostByProduct = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const product of products.rows) {
+      const pid = product.id;
+      const prodBatches = batches.rows.filter((b) => b.product_id === pid);
+      const prodBatchIds = new Set(prodBatches.map((b) => b.id));
+      const directCosts = costs.rows.filter(
+        (c) => c.product_id === pid || (c.batch_id && prodBatchIds.has(c.batch_id))
+      );
+      const attrCosts = costs.rows.filter(
+        (c) => c.attributed_to_batch_id && prodBatchIds.has(c.attributed_to_batch_id) && c.product_id !== pid
+      );
+      const totalCost = [...directCosts, ...attrCosts].reduce((s, c) => s + costTotal(c), 0);
+      const totalQty = prodBatches.reduce((s, b) => s + (Number(b.quantity) || 0), 0);
+      if (totalQty > 0 && totalCost > 0) map.set(pid, Math.round(totalCost / totalQty));
+    }
+    return map;
+  }, [products.rows, batches.rows, costs.rows]);
 
   async function save(data: Row) {
     const payload = clean({
@@ -547,18 +569,22 @@ function ProductsPage() {
       {products.error && <Notice tone="error">商品資料讀取失敗：{products.error}</Notice>}
       {(progress.error || events.error) && <Notice tone="error">進度資料讀取失敗：{progress.error || events.error}</Notice>}
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
-      <Table columns={['SKU', '商品名稱', '分類', '狀態', '最近進度', '廠商', '操作']}>
-        {products.loading ? <LoadingRow /> : filteredProducts.map((row) => (
-          <tr key={row.id} className="border-t align-top">
-            <td className="p-3">{row.sku}</td>
-            <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link><p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p></td>
-            <td className="p-3">{categoryLabel(row.category)}</td>
-            <td className="p-3">{statusText(row.status)}</td>
-            <td className="p-3"><LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} /></td>
-            <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
-            <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
-          </tr>
-        ))}
+      <Table columns={['SKU', '商品名稱', '分類', '狀態', '單位成本', '最近進度', '廠商', '操作']}>
+        {products.loading ? <LoadingRow /> : filteredProducts.map((row) => {
+          const uc = unitCostByProduct.get(row.id);
+          return (
+            <tr key={row.id} className="border-t align-top">
+              <td className="p-3">{row.sku}</td>
+              <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link><p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p></td>
+              <td className="p-3">{categoryLabel(row.category)}</td>
+              <td className="p-3">{statusText(row.status)}</td>
+              <td className="p-3 tabular-nums">{costs.loading || batches.loading ? <span className="text-slate-300 text-xs">…</span> : uc ? <span className="font-medium text-sun">{formatCurrency(uc)}</span> : <span className="text-slate-300">—</span>}</td>
+              <td className="p-3"><LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} /></td>
+              <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
+              <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
+            </tr>
+          );
+        })}
       </Table>
     </Page>
   );
@@ -585,12 +611,25 @@ function ProductDetailPage() {
     acc[key].push(c);
     return acc;
   }, {});
-  // 被歸入此主商品的配件費用（product_id 不是本商品，但 attributed_to_product_id === id）
-  const attributedCosts = costs.rows.filter(
-    (c) => c.attributed_to_product_id === id && c.product_id !== id && !(c.batch_id && productBatchIds.has(c.batch_id))
+  // 批次層級歸屬：其他商品的費用，attributed_to_batch_id 指向本商品的某個批次
+  const attributedByBatch = costs.rows.reduce<Record<string, Row[]>>((acc, c) => {
+    if (c.attributed_to_batch_id && c.product_id !== id && productBatchIds.has(c.attributed_to_batch_id)) {
+      acc[c.attributed_to_batch_id] = acc[c.attributed_to_batch_id] ?? [];
+      acc[c.attributed_to_batch_id].push(c);
+    }
+    return acc;
+  }, {});
+  // 舊版商品層級歸屬（attributed_to_product_id，無 attributed_to_batch_id）
+  const legacyAttributedCosts = costs.rows.filter(
+    (c) => c.attributed_to_product_id === id && c.product_id !== id &&
+           !c.attributed_to_batch_id && !(c.batch_id && productBatchIds.has(c.batch_id))
   );
+  const allAttributedCosts = [
+    ...Object.values(attributedByBatch).flat(),
+    ...legacyAttributedCosts,
+  ];
   const directTotal = productCosts.reduce((s, c) => s + costTotal(c), 0);
-  const attributedTotal = attributedCosts.reduce((s, c) => s + costTotal(c), 0);
+  const attributedTotal = allAttributedCosts.reduce((s, c) => s + costTotal(c), 0);
   const fullTotal = directTotal + attributedTotal;
   const totalQty = productBatches.reduce((s, b) => s + (Number(b.quantity) || 0), 0);
   const [editing, setEditing] = useState<Row | null>(null);
@@ -609,7 +648,7 @@ function ProductDetailPage() {
       product_id: id,
       batch_id: data.batch_id || null,
       vendor_id: data.vendor_id || null,
-      attributed_to_product_id: data.attributed_to_product_id || id,
+      attributed_to_batch_id: data.attributed_to_batch_id || data.batch_id || null,
       type: data.type || null,
       custom_type: data.type === 'other' ? data.custom_type : null,
       description: data.description,
@@ -820,7 +859,10 @@ function ProductDetailPage() {
             )}
             {productBatches.map((batch) => {
               const batchCosts = costsByBatch[batch.id] ?? [];
-              const totalTWD = batchCosts.reduce((s, c) => s + costTotal(c), 0);
+              const batchAttrCosts = attributedByBatch[batch.id] ?? [];
+              const directTWD = batchCosts.reduce((s, c) => s + costTotal(c), 0);
+              const attrTWD = batchAttrCosts.reduce((s, c) => s + costTotal(c), 0);
+              const totalTWD = directTWD + attrTWD;
               const paidTWD = batchCosts.filter((c) => c.payment_status === 'paid').reduce((s, c) => s + costTotal(c), 0);
               const qty = Number(batch.quantity) || 0;
               const unitCost = qty > 0 ? totalTWD / qty : 0;
@@ -835,11 +877,18 @@ function ProductDetailPage() {
                       {batch.notes && <p className="mt-1 text-xs text-slate-400">{batch.notes}</p>}
                     </div>
                     <div className="text-right">
-                      <p className="text-xs text-slate-500">批次總成本（台幣）</p>
+                      {attrTWD > 0 && (
+                        <div className="mb-2 text-xs text-slate-400">
+                          <span>直接費用 {formatCurrency(directTWD)}</span>
+                          <span className="mx-1">＋</span>
+                          <span className="text-moss">配件 {formatCurrency(attrTWD)}</span>
+                        </div>
+                      )}
+                      <p className="text-xs text-slate-500">{attrTWD > 0 ? '完整成本（台幣）' : '批次總成本（台幣）'}</p>
                       <p className="text-xl font-bold text-ink">{formatCurrency(totalTWD)}</p>
-                      <p className="mt-1 text-sm text-slate-600">單位成本：<span className="font-semibold text-leaf">{formatCurrency(unitCost)}</span></p>
-                      {paidTWD < totalTWD && (
-                        <p className="mt-0.5 text-xs text-amber-500">待付：{formatCurrency(totalTWD - paidTWD)}</p>
+                      <p className="mt-1 text-sm text-slate-600">完整單位成本：<span className="font-semibold text-sun">{qty > 0 ? formatCurrency(Math.round(unitCost)) : '-'}</span></p>
+                      {paidTWD < directTWD && (
+                        <p className="mt-0.5 text-xs text-amber-500">待付：{formatCurrency(directTWD - paidTWD)}</p>
                       )}
                     </div>
                   </div>
@@ -873,13 +922,46 @@ function ProductDetailPage() {
                             </tr>
                           ))}
                         </tbody>
-                        <tfoot className="border-t-2 border-slate-200 bg-slate-50">
-                          <tr>
-                            <td colSpan={6} className="px-4 py-2.5 text-right text-sm font-medium text-slate-600">批次合計</td>
-                            <td className="px-4 py-2.5 font-bold text-ink">{formatCurrency(totalTWD)}</td>
-                            <td />
-                          </tr>
-                        </tfoot>
+                        {batchAttrCosts.length > 0 ? (
+                          <>
+                            <tbody className="bg-moss/5">
+                              <tr><td colSpan={8} className="px-4 py-1.5 text-xs font-medium text-moss border-t border-moss/20">▼ 歸入配件費用</td></tr>
+                              {batchAttrCosts.map((c) => {
+                                const srcProd = products.rows.find((p) => p.id === c.product_id);
+                                return (
+                                  <tr key={c.id} className="border-b border-moss/10 hover:bg-moss/10">
+                                    <td className="px-4 py-2 font-medium text-moss">
+                                      <Link to={`/products/${c.product_id}`} className="hover:underline">{srcProd?.name ?? '-'}</Link>
+                                    </td>
+                                    <td className="px-4 py-2 text-slate-600">{c.description || costTypeLabel(c.type)}</td>
+                                    <td className="px-4 py-2">{c.currency}</td>
+                                    <td className="px-4 py-2">{Number(c.amount ?? 0).toLocaleString('zh-TW', { maximumFractionDigits: 2 })}</td>
+                                    <td className="px-4 py-2 text-slate-500">{c.exchange_rate_to_twd}</td>
+                                    <td className="px-4 py-2">{Number(c.bank_fee_twd ?? 0) > 0 ? formatCurrency(c.bank_fee_twd) : '-'}</td>
+                                    <td className="px-4 py-2 font-semibold text-moss">{formatCurrency(costTotal(c))}</td>
+                                    <td />
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot className="border-t-2 border-moss/30 bg-moss/10">
+                              <tr>
+                                <td colSpan={5} className="px-4 py-2.5 text-right text-sm font-medium text-slate-600">直接費用 {formatCurrency(directTWD)}</td>
+                                <td className="px-4 py-2.5 text-right text-xs text-moss">配件 +{formatCurrency(attrTWD)}</td>
+                                <td className="px-4 py-2.5 font-bold text-ink">{formatCurrency(totalTWD)}</td>
+                                <td />
+                              </tr>
+                            </tfoot>
+                          </>
+                        ) : (
+                          <tfoot className="border-t-2 border-slate-200 bg-slate-50">
+                            <tr>
+                              <td colSpan={6} className="px-4 py-2.5 text-right text-sm font-medium text-slate-600">批次合計</td>
+                              <td className="px-4 py-2.5 font-bold text-ink">{formatCurrency(totalTWD)}</td>
+                              <td />
+                            </tr>
+                          </tfoot>
+                        )}
                       </table>
                     </div>
                   )}
@@ -892,12 +974,12 @@ function ProductDetailPage() {
               </p>
             )}
 
-            {/* 歸入配件費用 */}
-            {attributedCosts.length > 0 && (
+            {/* 舊版商品層級歸屬（無批次對應，顯示在底部供參） */}
+            {legacyAttributedCosts.length > 0 && (
               <div className="overflow-hidden rounded-lg border border-moss/30 bg-moss/5">
                 <div className="border-b border-moss/20 bg-moss/10 px-5 py-3">
-                  <p className="font-medium text-moss">歸入配件費用</p>
-                  <p className="text-xs text-moss/70 mt-0.5">以下費用屬於其他商品，但已歸屬至此商品的成本中</p>
+                  <p className="font-medium text-moss">歸入配件費用（商品層級）</p>
+                  <p className="text-xs text-moss/70 mt-0.5">以下費用已歸入此商品，但未指定批次。建議編輯費用後指定歸屬批次</p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[640px] text-sm">
@@ -909,7 +991,7 @@ function ProductDetailPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {attributedCosts.map((c) => {
+                      {legacyAttributedCosts.map((c) => {
                         const srcProduct = products.rows.find((p) => p.id === c.product_id);
                         return (
                           <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
@@ -1076,7 +1158,7 @@ function CostsPage() {
       product_id: data.product_id || null,
       batch_id: data.batch_id || null,
       vendor_id: data.vendor_id || null,
-      attributed_to_product_id: data.attributed_to_product_id || data.product_id || null,
+      attributed_to_batch_id: data.attributed_to_batch_id || data.batch_id || null,
       type: data.type || null,
       custom_type: data.type === 'other' ? data.custom_type : null,
       description: data.description,
@@ -1159,20 +1241,34 @@ function CostsPage() {
       )}
       {saveError && <p className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-600">{saveError}</p>}
       {open && <CostForm row={editing} products={products.rows} batches={batches.rows} onCancel={() => { setOpen(false); setSaveError(''); }} onSave={save} />}
-      <Table columns={['付款日', '商品', '類型', '說明', '金額', '匯率', '手續費', '台幣總額', '操作']}>
-        {monthRows.map((row) => (
-          <tr key={row.id} className="border-t align-top">
-            <td className="p-3">{row.paid_at}</td>
-            <td className="p-3">{products.rows.find((p) => p.id === row.product_id)?.name}</td>
-            <td className="p-3">{row.custom_type || costTypeLabel(row.type)}</td>
-            <td className="p-3">{row.description}</td>
-            <td className="p-3">{row.currency} {Number(row.amount ?? 0).toLocaleString('zh-TW')}</td>
-            <td className="p-3">{row.exchange_rate_to_twd}</td>
-            <td className="p-3">{formatCurrency(row.bank_fee_twd)}</td>
-            <td className="p-3 font-medium">{formatCurrency(costTotal(row))}</td>
-            <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
-          </tr>
-        ))}
+      <Table columns={['付款日', '商品', '類型', '說明', '金額', '匯率', '手續費', '台幣總額', '歸屬批次', '操作']}>
+        {monthRows.map((row) => {
+          const attrBatch = batches.rows.find((b) => b.id === row.attributed_to_batch_id);
+          const attrProd = attrBatch ? products.rows.find((p) => p.id === attrBatch.product_id) : null;
+          const isDiffBatch = attrBatch && row.attributed_to_batch_id !== row.batch_id;
+          return (
+            <tr key={row.id} className="border-t align-top">
+              <td className="p-3">{row.paid_at}</td>
+              <td className="p-3">{products.rows.find((p) => p.id === row.product_id)?.name}</td>
+              <td className="p-3">{row.custom_type || costTypeLabel(row.type)}</td>
+              <td className="p-3">{row.description}</td>
+              <td className="p-3">{row.currency} {Number(row.amount ?? 0).toLocaleString('zh-TW')}</td>
+              <td className="p-3">{row.exchange_rate_to_twd}</td>
+              <td className="p-3">{formatCurrency(row.bank_fee_twd)}</td>
+              <td className="p-3 font-medium">{formatCurrency(costTotal(row))}</td>
+              <td className="p-3 text-xs">
+                {isDiffBatch ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-moss/10 px-2 py-0.5 font-medium text-moss">
+                    已歸入：{attrProd?.name ?? ''} / {attrBatch.name}
+                  </span>
+                ) : attrBatch ? (
+                  <span className="text-slate-400">{attrBatch.name}</span>
+                ) : <span className="text-slate-300">—</span>}
+              </td>
+              <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
+            </tr>
+          );
+        })}
       </Table>
     </Page>
   );
@@ -1304,19 +1400,25 @@ function ProgressForm({ row, onSave, onCancel }: { row: Row | null; onSave: (dat
 }
 
 function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | null; products: Row[]; batches: Row[]; onSave: (data: Row) => void; onCancel: () => void }) {
-  const [data, setData] = useState<Row>({ ...row ?? {}, attributed_to_product_id: row?.attributed_to_product_id ?? row?.product_id ?? '' });
+  const [data, setData] = useState<Row>({ ...row ?? {}, attributed_to_batch_id: row?.attributed_to_batch_id ?? row?.batch_id ?? '' });
   const [addingProduct, setAddingProduct] = useState(false);
   const [newProductName, setNewProductName] = useState('');
   const [newProductSku, setNewProductSku] = useState('');
   const [saving, setSaving] = useState(false);
   const [attrSearch, setAttrSearch] = useState(() => {
-    const p = products.find(x => x.id === (row?.attributed_to_product_id ?? row?.product_id));
-    return p ? `${p.sku ? p.sku + ' ' : ''}${p.name}` : '';
+    const bid = row?.attributed_to_batch_id ?? row?.batch_id;
+    const b = batches.find(x => x.id === bid);
+    if (!b) return '';
+    const p = products.find(x => x.id === b.product_id);
+    return `${p?.sku ? p.sku + ' ' : ''}${p?.name ?? ''} / ${b.name ?? ''}`;
   });
   const [attrOpen, setAttrOpen] = useState(false);
   const attrFiltered = attrSearch.trim()
-    ? products.filter((p) => `${p.sku ?? ''} ${p.name ?? ''}`.toLowerCase().includes(attrSearch.toLowerCase()))
-    : products;
+    ? batches.filter((b) => {
+        const p = products.find(x => x.id === b.product_id);
+        return `${p?.sku ?? ''} ${p?.name ?? ''} ${b.name ?? ''}`.toLowerCase().includes(attrSearch.toLowerCase());
+      })
+    : batches;
 
   async function createProduct() {
     if (!newProductName.trim() || !supabase) return;
@@ -1396,33 +1498,51 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
           <label key={key} className="text-sm">{label}<input type="date" value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
         ))}
 
-        {/* 歸屬主商品 */}
+        {/* 歸屬批次 */}
         <label className="text-sm md:col-span-3">
-          <span>歸屬主商品</span>
-          <span className="ml-2 text-xs text-slate-400">此費用要計入哪個主商品的成本？預設與「商品」相同，配件費用可改選主商品</span>
+          <span className="font-medium">歸屬批次</span>
+          <span className="ml-2 text-xs text-slate-400">此費用計入哪個商品批次的成本？預設與上方「採購批次」相同；配件費用可改選其他商品的批次</span>
           <div className="relative mt-1">
             <input
               value={attrSearch}
-              onChange={(e) => { setAttrSearch(e.target.value); setAttrOpen(true); setData({ ...data, attributed_to_product_id: '' }); }}
+              onChange={(e) => { setAttrSearch(e.target.value); setAttrOpen(true); setData({ ...data, attributed_to_batch_id: '' }); }}
               onFocus={() => setAttrOpen(true)}
-              placeholder="搜尋商品名稱或 SKU…"
+              placeholder="搜尋商品名稱、SKU 或批次名稱…"
               className="w-full rounded-md border px-3 py-2 text-sm"
             />
-            {attrOpen && attrFiltered.length > 0 && (
-              <div className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
-                <button type="button" onClick={() => { setAttrSearch(''); setData({ ...data, attributed_to_product_id: '' }); setAttrOpen(false); }} className="w-full px-3 py-2 text-left text-sm text-slate-400 hover:bg-slate-50">— 不指定（與上方商品相同）</button>
-                {attrFiltered.slice(0, 20).map((p) => (
-                  <button key={p.id} type="button" onClick={() => { setAttrSearch(`${p.sku ? p.sku + ' ' : ''}${p.name}`); setData({ ...data, attributed_to_product_id: p.id }); setAttrOpen(false); }}
-                    className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-50 ${data.attributed_to_product_id === p.id ? 'bg-lime/10 font-semibold' : ''}`}>
-                    {p.sku && <span className="mr-2 font-mono text-xs text-slate-400">{p.sku}</span>}{p.name}
-                  </button>
-                ))}
+            {attrOpen && (
+              <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                <button type="button" onClick={() => { setAttrSearch(''); setData({ ...data, attributed_to_batch_id: '' }); setAttrOpen(false); }}
+                  className="w-full px-3 py-2 text-left text-sm text-slate-400 hover:bg-slate-50">— 不指定歸屬批次</button>
+                {attrFiltered.slice(0, 25).map((b) => {
+                  const p = products.find(x => x.id === b.product_id);
+                  const label = `${p?.sku ? p.sku + ' ' : ''}${p?.name ?? ''} / ${b.name ?? ''}`;
+                  return (
+                    <button key={b.id} type="button"
+                      onClick={() => { setAttrSearch(label); setData({ ...data, attributed_to_batch_id: b.id }); setAttrOpen(false); }}
+                      className={`w-full px-3 py-2 text-left text-sm hover:bg-slate-50 ${data.attributed_to_batch_id === b.id ? 'bg-lime/10 font-semibold' : ''}`}>
+                      <span className="text-slate-400 text-xs mr-1">{p?.sku ?? ''}</span>
+                      <span>{p?.name ?? '未知商品'}</span>
+                      <span className="mx-1 text-slate-300">/</span>
+                      <span className="text-slate-500">{b.name}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
-          {data.attributed_to_product_id && data.attributed_to_product_id !== data.product_id && (
-            <p className="mt-1 text-xs text-moss">✓ 此費用將歸入主商品「{products.find(p => p.id === data.attributed_to_product_id)?.name}」的完整成本</p>
-          )}
+          {(() => {
+            if (!data.attributed_to_batch_id) return null;
+            const attrBatch = batches.find(b => b.id === data.attributed_to_batch_id);
+            const attrProd = attrBatch ? products.find(p => p.id === attrBatch.product_id) : null;
+            if (!attrBatch) return null;
+            const isDiff = data.attributed_to_batch_id !== data.batch_id;
+            return isDiff ? (
+              <p className="mt-1 text-xs text-moss">✓ 此費用將歸入「{attrProd?.name ?? '未知商品'}」批次「{attrBatch.name}」的完整成本</p>
+            ) : (
+              <p className="mt-1 text-xs text-slate-400">歸屬批次與採購批次相同（預設）</p>
+            );
+          })()}
         </label>
 
         <label className="text-sm md:col-span-3">備註<textarea value={data.notes ?? ''} onChange={(e) => setData({ ...data, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" rows={2} /></label>
