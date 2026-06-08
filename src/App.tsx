@@ -3539,7 +3539,14 @@ function ImportPage() {
     }
 
     // ── 步驟 3：分批寫入（每批 500 筆）＋ 逐批驗證寫入數量 ──
-    const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
+    // 只取 DB 有的欄位（amount 只存在 parsed row 不在 DB schema）
+    const rowsWithDate = invRows.map((r) => ({
+      external_sku: r.external_sku,
+      product_name: r.product_name,
+      location: r.location,
+      quantity: r.quantity,
+      recorded_at: recordDate,
+    }));
     const BATCH = 500;
     const totalBatches = Math.ceil(rowsWithDate.length / BATCH);
     let totalInserted = 0;
