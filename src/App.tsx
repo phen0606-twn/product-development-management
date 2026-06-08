@@ -604,19 +604,25 @@ function ProductDetailPage() {
     .filter((b) => b.product_id === id)
     .sort((a, b) => String(a.ordered_at || '').localeCompare(String(b.ordered_at || '')));
   const productBatchIds = new Set(productBatches.map((b) => b.id));
-  const productCosts = costs.rows.filter((c) => c.product_id === id || (c.batch_id && productBatchIds.has(c.batch_id)));
-  const costsByBatch = productCosts.reduce<Record<string, Row[]>>((acc, c) => {
-    const key = c.batch_id ?? '__none__';
-    acc[key] = acc[key] ?? [];
-    acc[key].push(c);
-    return acc;
-  }, {});
   // 批次層級歸屬：其他商品的費用，attributed_to_batch_id 指向本商品的某個批次
+  // 先算出「歸入集合」，再用它排除 productCosts 的重疊，確保兩個區塊完全互斥
   const attributedByBatch = costs.rows.reduce<Record<string, Row[]>>((acc, c) => {
     if (c.attributed_to_batch_id && c.product_id !== id && productBatchIds.has(c.attributed_to_batch_id)) {
       acc[c.attributed_to_batch_id] = acc[c.attributed_to_batch_id] ?? [];
       acc[c.attributed_to_batch_id].push(c);
     }
+    return acc;
+  }, {});
+  const attributedCostIds = new Set(Object.values(attributedByBatch).flat().map((c) => c.id));
+  // 直接費用：屬於本商品或本商品批次，但排除已被列入「歸入配件費用」的筆數
+  const productCosts = costs.rows.filter(
+    (c) => (c.product_id === id || (c.batch_id && productBatchIds.has(c.batch_id)))
+      && !attributedCostIds.has(c.id)
+  );
+  const costsByBatch = productCosts.reduce<Record<string, Row[]>>((acc, c) => {
+    const key = c.batch_id ?? '__none__';
+    acc[key] = acc[key] ?? [];
+    acc[key].push(c);
     return acc;
   }, {});
   // 舊版商品層級歸屬（attributed_to_product_id，無 attributed_to_batch_id）
