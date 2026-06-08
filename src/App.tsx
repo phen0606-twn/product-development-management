@@ -3499,14 +3499,27 @@ function ImportPage() {
       if (error) { setInvMsg(`❌ 匯入失敗：${error.message}`); setInvImporting(false); return; }
     }
 
-    // ── 步驟 4：從 DB 讀取完整數量，與 Excel 逐 SKU 比對 ──
-    const { data: dbRows } = await supabase
-      .from('inventory_records').select('external_sku, quantity').eq('recorded_at', recordDate);
-    const dbTotal = (dbRows ?? []).reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+    // ── 步驟 4：分頁抓取 DB 完整資料，與 Excel 逐 SKU 比對 ──
+    // （不分頁的 SELECT 會被 Supabase 截斷在預設上限，造成誤報）
+    const allDbRows: Array<{ external_sku: string; quantity: number }> = [];
+    {
+      const PAGE = 1000;
+      let from = 0;
+      while (true) {
+        const { data: page } = await supabase
+          .from('inventory_records').select('external_sku, quantity')
+          .eq('recorded_at', recordDate).range(from, from + PAGE - 1);
+        if (!page || page.length === 0) break;
+        allDbRows.push(...page);
+        if (page.length < PAGE) break;
+        from += PAGE;
+      }
+    }
+    const dbTotal = allDbRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
 
     // 彙整 DB per-SKU 總量
     const dbBySku = new Map<string, number>();
-    for (const r of dbRows ?? []) {
+    for (const r of allDbRows) {
       const sku = String(r.external_sku || '');
       dbBySku.set(sku, (dbBySku.get(sku) ?? 0) + Number(r.quantity ?? 0));
     }
@@ -3526,11 +3539,11 @@ function ImportPage() {
     }
     diffs.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
 
-    const ok = parsedTotal === dbTotal && invRows.length === (dbRows?.length ?? 0);
+    const ok = parsedTotal === dbTotal && invRows.length === allDbRows.length;
     setInvValidation({
       date: recordDate, parsedSkus: skus.length,
       parsedRows: invRows.length, parsedTotal,
-      dbRows: dbRows?.length ?? 0, dbTotal,
+      dbRows: allDbRows.length, dbTotal,
       ok, topDiffs: diffs.slice(0, 10), deleteVerified,
     });
     setInvMsg(ok
