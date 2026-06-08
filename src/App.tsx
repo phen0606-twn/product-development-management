@@ -3362,6 +3362,13 @@ function ImportPage() {
   const [invFile, setInvFile] = useState('');
   const [recordDate, setRecordDate] = useState(new Date().toISOString().slice(0, 10));
   const [invImporting, setInvImporting] = useState(false);
+  type InvValidation = {
+    date: string; parsedSkus: number; parsedRows: number; parsedTotal: number;
+    dbRows: number; dbTotal: number; ok: boolean;
+    topDiffs: Array<{ sku: string; parsed: number; db: number; diff: number }>;
+    deleteVerified: boolean;
+  };
+  const [invValidation, setInvValidation] = useState<InvValidation | null>(null);
 
   async function previewSales(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -3457,43 +3464,79 @@ function ImportPage() {
     const rows = parseInventoryExcel(data);
     setInvRows(rows); setInvFile(file.name);
     const sheetNote = invSheetName !== workbook.SheetNames[0] ? `（sheet：${invSheetName}）` : '';
+    const parsedTotalQty = rows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
     setInvMsg(rows.length
-      ? `已解析 ${rows.length} 筆（${new Set(rows.map((r) => r.external_sku)).size} 個 SKU）${sheetNote}，請確認後匯入。`
+      ? `已解析 ${rows.length} 筆（${new Set(rows.map((r) => r.external_sku)).size} 個 SKU）${sheetNote}，解析總件數 ${parsedTotalQty.toLocaleString('zh-TW')} 件，請與 Excel 核對後匯入。`
       : `未解析到資料${sheetNote}，請確認格式。`);
+    setInvValidation(null);
   }
 
   async function doInvImport() {
     if (!supabase || invRows.length === 0) return;
     setInvImporting(true);
+    setInvValidation(null);
     const skus = [...new Set(invRows.map((r) => String(r.external_sku || '')).filter(Boolean))];
+    const parsedTotal = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
 
-    // ── 冪等性預檢：若同日已有資料則提示 ──
-    const { count: existingCount } = await supabase
-      .from('inventory_records').select('id', { count: 'exact', head: true }).eq('recorded_at', recordDate);
-    if ((existingCount ?? 0) > 0) {
-      setInvMsg(`ℹ️ ${recordDate} 已有 ${existingCount} 筆庫存記錄，將覆蓋同日同貨號資料...`);
-    }
-
-    // ── 防線 1：刪除同日所有舊紀錄（不限 SKU，確保完整替換）──
+    // ── 步驟 1：刪除同日所有舊紀錄（不限 SKU，確保完整替換）──
     const { error: delErr } = await supabase
       .from('inventory_records').delete().eq('recorded_at', recordDate);
     if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}。匯入已中止。`); setInvImporting(false); return; }
 
-    // ── 插入 ──
+    // ── 步驟 2：驗證刪除是否徹底（應為 0 筆）──
+    const { count: afterDelCount } = await supabase
+      .from('inventory_records').select('id', { count: 'exact', head: true }).eq('recorded_at', recordDate);
+    const deleteVerified = (afterDelCount ?? 0) === 0;
+    if (!deleteVerified) {
+      setInvMsg(`⚠ 刪除後仍殘留 ${afterDelCount} 筆舊資料（可能是 RLS 權限問題），請聯絡管理員。匯入已中止。`);
+      setInvImporting(false); return;
+    }
+
+    // ── 步驟 3：逐批插入 ──
     const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
     for (let i = 0; i < rowsWithDate.length; i += 500) {
       const { error } = await supabase.from('inventory_records').insert(rowsWithDate.slice(i, i + 500));
       if (error) { setInvMsg(`❌ 匯入失敗：${error.message}`); setInvImporting(false); return; }
     }
 
-    // ── 防線 2：驗證計數 ──
-    const { count: dbCount } = await supabase
-      .from('inventory_records').select('id', { count: 'exact', head: true }).eq('recorded_at', recordDate);
-    if ((dbCount ?? 0) < invRows.length) {
-      setInvMsg(`⚠ 匯入完成但數量異常：預期 ${invRows.length} 筆，資料庫實際 ${dbCount} 筆。`);
-    } else {
-      setInvMsg(`✓ 已匯入並驗證 ${recordDate} 共 ${invRows.length} 筆（${skus.length} 個 SKU），數量正確。`);
+    // ── 步驟 4：從 DB 讀取完整數量，與 Excel 逐 SKU 比對 ──
+    const { data: dbRows } = await supabase
+      .from('inventory_records').select('external_sku, quantity').eq('recorded_at', recordDate);
+    const dbTotal = (dbRows ?? []).reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+
+    // 彙整 DB per-SKU 總量
+    const dbBySku = new Map<string, number>();
+    for (const r of dbRows ?? []) {
+      const sku = String(r.external_sku || '');
+      dbBySku.set(sku, (dbBySku.get(sku) ?? 0) + Number(r.quantity ?? 0));
     }
+    // 彙整 Excel per-SKU 總量
+    const parsedBySku = new Map<string, number>();
+    for (const r of invRows) {
+      const sku = String(r.external_sku || '');
+      parsedBySku.set(sku, (parsedBySku.get(sku) ?? 0) + Number(r.quantity ?? 0));
+    }
+    // 找出差異
+    const allSkus = new Set([...parsedBySku.keys(), ...dbBySku.keys()]);
+    const diffs: Array<{ sku: string; parsed: number; db: number; diff: number }> = [];
+    for (const sku of allSkus) {
+      const p = parsedBySku.get(sku) ?? 0;
+      const d = dbBySku.get(sku) ?? 0;
+      if (p !== d) diffs.push({ sku, parsed: p, db: d, diff: d - p });
+    }
+    diffs.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+
+    const ok = parsedTotal === dbTotal && invRows.length === (dbRows?.length ?? 0);
+    setInvValidation({
+      date: recordDate, parsedSkus: skus.length,
+      parsedRows: invRows.length, parsedTotal,
+      dbRows: dbRows?.length ?? 0, dbTotal,
+      ok, topDiffs: diffs.slice(0, 10), deleteVerified,
+    });
+    setInvMsg(ok
+      ? `✓ 匯入成功：${recordDate} 共 ${invRows.length} 筆，總件數 ${parsedTotal.toLocaleString('zh-TW')} 件，與 Excel 完全一致。`
+      : `⚠ 匯入完成但發現差異：Excel 總件數 ${parsedTotal.toLocaleString('zh-TW')}，DB 總件數 ${dbTotal.toLocaleString('zh-TW')}，差異 ${(dbTotal - parsedTotal).toLocaleString('zh-TW')} 件。請查看比對報告。`
+    );
     setInvRows([]);
     setInvImporting(false);
   }
@@ -3551,33 +3594,95 @@ function ImportPage() {
           <button className="mt-4 rounded-md bg-sun px-4 py-2 text-sm text-white">預覽庫存資料</button>
           {invMsg && <p className="mt-3 text-sm text-slate-600">{invMsg}</p>}
         </form>
-        {invRows.length > 0 && (
-          <div className="mt-4 rounded-lg border border-slate-100 p-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-slate-500">{invFile}｜盤點日期 {recordDate}｜{new Set(invRows.map((r) => r.external_sku)).size} 個 SKU｜{invRows.length.toLocaleString('zh-TW')} 筆</p>
-                <p className="mt-1 text-xs text-amber-600">⚠ 同日期同貨號的舊資料將覆蓋，其他日期與其他貨號不受影響</p>
+        {invRows.length > 0 && (() => {
+          const parsedTotal = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+          return (
+            <div className="mt-4 rounded-lg border border-slate-100 p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-sm text-slate-500">{invFile}｜盤點日期 {recordDate}｜{new Set(invRows.map((r) => r.external_sku)).size} 個 SKU｜{invRows.length.toLocaleString('zh-TW')} 筆</p>
+                  <p className="mt-0.5 text-base font-semibold text-ink">解析總件數：{parsedTotal.toLocaleString('zh-TW')} 件</p>
+                  <p className="mt-1 text-xs text-amber-600">⚠ 將刪除 {recordDate} 的全部舊庫存記錄後重新寫入，其他日期不受影響</p>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setInvRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
+                  <button type="button" onClick={doInvImport} disabled={invImporting} className="rounded-md bg-sun px-3 py-1.5 text-sm text-white disabled:opacity-50">{invImporting ? '匯入中...' : '確認匯入'}</button>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => setInvRows([])} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
-                <button type="button" onClick={doInvImport} disabled={invImporting} className="rounded-md bg-sun px-3 py-1.5 text-sm text-white disabled:opacity-50">{invImporting ? '匯入中...' : '確認匯入'}</button>
+              <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-100">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">SKU</th><th className="p-2 text-left">位置</th><th className="p-2 text-right">數量</th></tr></thead>
+                  <tbody>
+                    {invRows.slice(0, 100).map((r, i) => (
+                      <tr key={i} className="border-t border-slate-100">
+                        <td className="p-2 font-mono text-slate-400">{r.external_sku}</td>
+                        <td className="p-2 text-slate-600">{r.location}</td>
+                        <td className="p-2 text-right">{Number(r.quantity).toLocaleString('zh-TW')}</td>
+                      </tr>
+                    ))}
+                    {invRows.length > 100 && <tr><td colSpan={3} className="p-2 text-center text-slate-400">...僅顯示前 100 筆</td></tr>}
+                  </tbody>
+                </table>
               </div>
             </div>
-            <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-100">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">SKU</th><th className="p-2 text-left">位置</th><th className="p-2 text-right">數量</th></tr></thead>
-                <tbody>
-                  {invRows.slice(0, 100).map((r, i) => (
-                    <tr key={i} className="border-t border-slate-100">
-                      <td className="p-2 font-mono text-slate-400">{r.external_sku}</td>
-                      <td className="p-2 text-slate-600">{r.location}</td>
-                      <td className="p-2 text-right">{Number(r.quantity).toLocaleString('zh-TW')}</td>
-                    </tr>
-                  ))}
-                  {invRows.length > 100 && <tr><td colSpan={3} className="p-2 text-center text-slate-400">...僅顯示前 100 筆</td></tr>}
-                </tbody>
-              </table>
+          );
+        })()}
+
+        {/* ── 匯入後比對報告 ── */}
+        {invValidation && (
+          <div className={`mt-4 rounded-lg border p-4 ${invValidation.ok ? 'border-lime/40 bg-lime/5' : 'border-amber-200 bg-amber-50'}`}>
+            <p className={`font-semibold ${invValidation.ok ? 'text-moss' : 'text-amber-700'}`}>
+              {invValidation.ok ? '✅ 匯入比對通過' : '⚠️ 匯入比對發現差異'}
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+              <div className="rounded-md bg-white p-3 shadow-sm">
+                <p className="text-xs text-slate-400">Excel 解析件數</p>
+                <p className="mt-0.5 text-lg font-semibold text-ink">{invValidation.parsedTotal.toLocaleString('zh-TW')} 件</p>
+                <p className="text-xs text-slate-400">{invValidation.parsedRows} 筆 / {invValidation.parsedSkus} 個 SKU</p>
+              </div>
+              <div className="rounded-md bg-white p-3 shadow-sm">
+                <p className="text-xs text-slate-400">資料庫寫入件數</p>
+                <p className={`mt-0.5 text-lg font-semibold ${invValidation.ok ? 'text-moss' : 'text-amber-600'}`}>{invValidation.dbTotal.toLocaleString('zh-TW')} 件</p>
+                <p className="text-xs text-slate-400">{invValidation.dbRows} 筆</p>
+              </div>
+              <div className="rounded-md bg-white p-3 shadow-sm">
+                <p className="text-xs text-slate-400">差異</p>
+                <p className={`mt-0.5 text-lg font-semibold ${invValidation.ok ? 'text-moss' : 'text-red-600'}`}>
+                  {invValidation.ok ? '無差異' : `${(invValidation.dbTotal - invValidation.parsedTotal > 0 ? '+' : '')}${(invValidation.dbTotal - invValidation.parsedTotal).toLocaleString('zh-TW')} 件`}
+                </p>
+                <p className="text-xs text-slate-400">刪除驗證：{invValidation.deleteVerified ? '✓ 通過' : '✗ 失敗'}</p>
+              </div>
             </div>
+            {invValidation.topDiffs.length > 0 && (
+              <div className="mt-3">
+                <p className="mb-2 text-xs font-medium text-amber-700">差異最大的前 {invValidation.topDiffs.length} 個品項：</p>
+                <div className="overflow-x-auto rounded-md border border-amber-100">
+                  <table className="w-full text-xs">
+                    <thead className="bg-amber-100/60">
+                      <tr>
+                        <th className="p-2 text-left">SKU</th>
+                        <th className="p-2 text-right">Excel 件數</th>
+                        <th className="p-2 text-right">DB 件數</th>
+                        <th className="p-2 text-right">差異</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invValidation.topDiffs.map((d) => (
+                        <tr key={d.sku} className="border-t border-amber-100">
+                          <td className="p-2 font-mono">{d.sku}</td>
+                          <td className="p-2 text-right">{d.parsed.toLocaleString('zh-TW')}</td>
+                          <td className="p-2 text-right">{d.db.toLocaleString('zh-TW')}</td>
+                          <td className={`p-2 text-right font-semibold ${d.diff > 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                            {d.diff > 0 ? '+' : ''}{d.diff.toLocaleString('zh-TW')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-1 text-xs text-amber-500">正數 = DB 多於 Excel（殘留舊資料）；負數 = DB 少於 Excel（插入失敗）</p>
+              </div>
+            )}
           </div>
         )}
       </section>

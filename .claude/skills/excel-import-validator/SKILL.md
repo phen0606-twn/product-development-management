@@ -1,6 +1,56 @@
 # Excel 匯入驗證規範 — 商品開發管理系統
 
-每次修改 `import_sales.py` 的解析邏輯，或匯入新的業績 Excel 時，必須參照本規範執行全套驗證流程。
+每次修改匯入相關功能（業績或庫存）時，必須參照本規範執行全套驗證流程。
+
+---
+
+## 零、庫存匯入核心規範（`doInvImport` in `src/App.tsx`）
+
+### 正確流程（4 步驟，缺一不可）
+
+```
+步驟 1：DELETE FROM inventory_records WHERE recorded_at = recordDate
+         ↑ 不可加 .in('external_sku', skuList)，否則孤立 SKU 殘留 → 總量虛高
+步驟 2：驗證刪除 → SELECT COUNT(*) WHERE recorded_at = recordDate，應為 0
+         ↑ RLS 限制可能讓 DELETE「成功但無效」，必須驗證
+步驟 3：INSERT 新資料（每批 500 筆）
+步驟 4：驗證寫入 → 從 DB 查 SUM(quantity) per SKU，與 Excel 解析值比對
+         → 產生比對報告顯示在畫面上（parsedTotal vs dbTotal，差異最大前 10 SKU）
+```
+
+### 預覽畫面必顯示
+
+匯入確認前的預覽畫面必須顯示 **解析總件數**（`SUM(quantity)` of parsed rows），讓用戶在匯入前對照 Excel 合計欄：
+```
+已解析 {rows.length} 筆（{SKU數} 個 SKU），解析總件數 {SUM} 件，請與 Excel 核對後匯入。
+```
+
+### 匯入後比對報告欄位
+
+| 欄位 | 說明 |
+|------|------|
+| `parsedTotal` | Excel 解析後 `SUM(quantity)` |
+| `dbTotal` | 匯入後 DB `SUM(quantity)` WHERE recorded_at = date |
+| `parsedRows` | Excel 解析筆數 |
+| `dbRows` | DB 實際筆數 |
+| `deleteVerified` | 步驟 2 是否通過（應為 true） |
+| `topDiffs` | 差異最大的前 10 個 SKU（diff > 0 = DB 多，diff < 0 = DB 少） |
+
+### 已知錯誤模式
+
+| 錯誤 | 症狀 | 原因 |
+|------|------|------|
+| DELETE 加了 `IN (external_sku)` | 系統總件數比 Excel 多，每次匯入越來越大 | 孤立 SKU 殘留（**已修正，2026-06-08**）|
+| 未驗證刪除（步驟 2 缺失） | RLS 靜默失敗，舊資料全殘留 | 必須驗證 COUNT = 0 |
+| INSERT 批次失敗未中止 | 部分寫入，部分遺失 | 需 error early return |
+
+### 版本記錄
+
+| 日期 | 變更 |
+|------|------|
+| 2026-06-08 | 初版：4 步驟流程、DELETE 不可加 SKU 篩選、比對報告規範 |
+
+---
 
 ---
 
