@@ -3474,13 +3474,10 @@ function ImportPage() {
       setInvMsg(`ℹ️ ${recordDate} 已有 ${existingCount} 筆庫存記錄，將覆蓋同日同貨號資料...`);
     }
 
-    // ── 防線 1：逐批刪除，檢查 error ──
-    for (let i = 0; i < skus.length; i += 100) {
-      const chunk = skus.slice(i, i + 100);
-      const { error: delErr } = await supabase
-        .from('inventory_records').delete().eq('recorded_at', recordDate).in('external_sku', chunk);
-      if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}。匯入已中止。`); setInvImporting(false); return; }
-    }
+    // ── 防線 1：刪除同日所有舊紀錄（不限 SKU，確保完整替換）──
+    const { error: delErr } = await supabase
+      .from('inventory_records').delete().eq('recorded_at', recordDate);
+    if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}。匯入已中止。`); setInvImporting(false); return; }
 
     // ── 插入 ──
     const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
