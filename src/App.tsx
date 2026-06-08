@@ -3281,14 +3281,29 @@ function InventoryPage() {
   );
 }
 
-function parseInventoryExcel(data: unknown[][]): Row[] {
-  if (data.length === 0) return [];
+type ParsedInventory = {
+  rows: Row[];
+  excelTotal: { qty: number; amount: number } | null; // 總計 row values
+};
+
+function parseInventoryExcel(data: unknown[][]): ParsedInventory {
+  if (data.length === 0) return { rows: [], excelTotal: null };
+
+  // ── 找 總計 row（最後一列，label = '總計'）────────────────────────────────
+  let excelTotal: { qty: number; amount: number } | null = null;
+  for (let i = data.length - 1; i >= 0; i--) {
+    const lbl = String(data[i]?.[0] ?? '').trim();
+    if (lbl === '總計') {
+      const q = Number(data[i][1] ?? 0);
+      const a = Number(data[i][2] ?? 0);
+      if (q > 0) excelTotal = { qty: q, amount: a };
+      break;
+    }
+  }
 
   // ── 格式自動偵測 ──────────────────────────────────────────────────────────
   // 格式 A（平面表格）：header = ['商品型號', '品名規格', '庫點', '單價', '折扣', '庫存', ...]
-  //   → col[0]=SKU, col[1]=商品名, col[2]=庫點, col[5]=庫存量
-  // 格式 B（層級格式）：header = ['商品', '庫存', ...]
-  //   → SKU 行後接各庫點明細行
+  // 格式 B（層級格式）：header = ['商品', '庫存', '加總 - 金額', ...]
   const header = (data[0] as unknown[]).map((c) => String(c ?? '').trim());
   const isTabular = header[0] === '商品型號' && header[2] === '庫點';
 
@@ -3303,10 +3318,11 @@ function parseInventoryExcel(data: unknown[][]): Row[] {
       if (!sku || sku === '商品型號' || !isFinite(qty) || qty === 0) continue;
       records.push({ external_sku: sku, product_name: `${sku} ${name}`.trim(), location: loc, quantity: qty });
     }
-    return records;
+    return { rows: records, excelTotal };
   }
 
-  // ── 格式 B：舊式層級格式（SKU 標頭 + 各庫點明細行）─────────────────────
+  // ── 格式 B：層級格式（商品群組標頭 → SKU 標頭 → 各庫點明細行）──────────
+  // col[0]=名稱, col[1]=庫存量, col[2]=金額
   const records: Row[] = [];
   let currentSku = '';
   let currentName = '';
@@ -3325,22 +3341,33 @@ function parseInventoryExcel(data: unknown[][]): Row[] {
   for (const row of data) {
     const label  = String(row[0] ?? '').trim();
     const rawQty = row[1];
-    // Guard: only accept numeric values; text (e.g. product name in wrong column) → skip
+    const rawAmt = row[2];
     const qty = typeof rawQty === 'number' && isFinite(rawQty) ? rawQty : 0;
-    if (!label || label === '商品') continue;
+    const amt = typeof rawAmt === 'number' && isFinite(rawAmt) ? rawAmt : 0;
+    // skip header row, empty rows, 總計 row
+    if (!label || label === '商品' || label === '總計') continue;
     const firstWord = label.split(/\s+/)[0] ?? '';
     if (/^[A-Za-z]{2,}\d/.test(firstWord)) {
+      // ── SKU 標頭行 ──
       flush();
       currentSku  = firstWord.toUpperCase();
       currentName = label.slice(firstWord.length).trim();
-      // Only use numeric qty for SKU header total; text values mean wrong format
-      currentSkuQty = typeof rawQty === 'number' && isFinite(rawQty) ? rawQty : 0;
+      currentSkuQty = qty;
     } else if (currentSku && qty !== 0 && /^\d{4,6}$|^[A-Z]\d{3}|^0ZZZZ/.test(firstWord)) {
-      locRows.push({ external_sku: currentSku, product_name: `${currentSku} ${currentName}`, location: label, quantity: qty });
+      // ── 庫點明細行 ── 儲存 quantity 和 amount
+      locRows.push({
+        external_sku: currentSku,
+        product_name: `${currentSku} ${currentName}`,
+        location: label,
+        quantity: qty,
+        amount: amt,
+      });
     }
+    // 商品群組小計（如「air方框折疊墨鏡E款」）→ 直接跳過
   }
   flush();
-  return records.filter((r) => isFinite(Number(r.quantity)) && r.quantity !== null);
+  const rows = records.filter((r) => isFinite(Number(r.quantity)) && r.quantity !== null);
+  return { rows, excelTotal };
 }
 
 function ImportPage() {
@@ -3362,11 +3389,14 @@ function ImportPage() {
   const [invFile, setInvFile] = useState('');
   const [recordDate, setRecordDate] = useState(new Date().toISOString().slice(0, 10));
   const [invImporting, setInvImporting] = useState(false);
+  const [invExcelTotal, setInvExcelTotal] = useState<{ qty: number; amount: number } | null>(null);
   type InvValidation = {
-    date: string; parsedSkus: number; parsedRows: number; parsedTotal: number;
-    dbRows: number; dbTotal: number; ok: boolean;
+    date: string; parsedSkus: number; parsedRows: number;
+    parsedQty: number; parsedAmount: number;
+    excelQty: number; excelAmount: number;
+    dbRows: number; dbQty: number;
+    ok: boolean; deleteVerified: boolean;
     topDiffs: Array<{ sku: string; parsed: number; db: number; diff: number }>;
-    deleteVerified: boolean;
   };
   const [invValidation, setInvValidation] = useState<InvValidation | null>(null);
 
@@ -3461,14 +3491,26 @@ function ImportPage() {
       workbook.SheetNames[0];
     const sheet = workbook.Sheets[invSheetName];
     const data: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    const rows = parseInventoryExcel(data);
-    setInvRows(rows); setInvFile(file.name);
+    const { rows, excelTotal } = parseInventoryExcel(data);
+    setInvRows(rows); setInvFile(file.name); setInvExcelTotal(excelTotal); setInvValidation(null);
     const sheetNote = invSheetName !== workbook.SheetNames[0] ? `（sheet：${invSheetName}）` : '';
-    const parsedTotalQty = rows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-    setInvMsg(rows.length
-      ? `已解析 ${rows.length} 筆（${new Set(rows.map((r) => r.external_sku)).size} 個 SKU）${sheetNote}，解析總件數 ${parsedTotalQty.toLocaleString('zh-TW')} 件，請與 Excel 核對後匯入。`
-      : `未解析到資料${sheetNote}，請確認格式。`);
-    setInvValidation(null);
+    const parsedQty = rows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+    const parsedAmt = rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+    if (rows.length === 0) {
+      setInvMsg(`未解析到資料${sheetNote}，請確認格式。`); return;
+    }
+    // 解析後立刻比對 總計 row
+    if (excelTotal) {
+      const qtyOk = parsedQty === excelTotal.qty;
+      const amtOk = parsedAmt === excelTotal.amount;
+      if (!qtyOk || !amtOk) {
+        setInvMsg(`⚠ 解析總計與 Excel 不符！件數：解析 ${parsedQty.toLocaleString('zh-TW')} vs Excel 總計 ${excelTotal.qty.toLocaleString('zh-TW')}；金額：解析 ${formatCurrency(parsedAmt)} vs Excel 總計 ${formatCurrency(excelTotal.amount)}。請勿匯入，確認格式是否正確。`);
+        return;
+      }
+      setInvMsg(`✓ 解析完成${sheetNote}：${rows.length.toLocaleString('zh-TW')} 筆 / ${new Set(rows.map((r) => r.external_sku)).size} 個 SKU / 總件數 ${parsedQty.toLocaleString('zh-TW')} 件 / 總金額 ${formatCurrency(parsedAmt)}，與 Excel 總計欄吻合。請確認後匯入。`);
+    } else {
+      setInvMsg(`已解析 ${rows.length.toLocaleString('zh-TW')} 筆${sheetNote}，總件數 ${parsedQty.toLocaleString('zh-TW')} 件，未找到 總計 列，請手動確認後匯入。`);
+    }
   }
 
   async function doInvImport() {
@@ -3476,31 +3518,51 @@ function ImportPage() {
     setInvImporting(true);
     setInvValidation(null);
     const skus = [...new Set(invRows.map((r) => String(r.external_sku || '')).filter(Boolean))];
-    const parsedTotal = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+    const parsedQty = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+    const parsedAmt = invRows.reduce((s, r) => s + Number(r.amount  ?? 0), 0);
+    const excelQty  = invExcelTotal?.qty    ?? parsedQty;
+    const excelAmt  = invExcelTotal?.amount ?? parsedAmt;
 
     // ── 步驟 1：刪除同日所有舊紀錄（不限 SKU，確保完整替換）──
+    setInvMsg('⏳ 步驟 1/4：清除舊資料...');
     const { error: delErr } = await supabase
       .from('inventory_records').delete().eq('recorded_at', recordDate);
-    if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}。匯入已中止。`); setInvImporting(false); return; }
+    if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}`); setInvImporting(false); return; }
 
-    // ── 步驟 2：驗證刪除是否徹底（應為 0 筆）──
+    // ── 步驟 2：驗證刪除是否徹底 ──
     const { count: afterDelCount } = await supabase
       .from('inventory_records').select('id', { count: 'exact', head: true }).eq('recorded_at', recordDate);
     const deleteVerified = (afterDelCount ?? 0) === 0;
     if (!deleteVerified) {
-      setInvMsg(`⚠ 刪除後仍殘留 ${afterDelCount} 筆舊資料（可能是 RLS 權限問題），請聯絡管理員。匯入已中止。`);
+      setInvMsg(`⚠ 刪除後仍殘留 ${afterDelCount} 筆（RLS 權限問題），匯入已中止。`);
       setInvImporting(false); return;
     }
 
-    // ── 步驟 3：逐批插入 ──
+    // ── 步驟 3：分批寫入（每批 500 筆）＋ 逐批驗證寫入數量 ──
     const rowsWithDate = invRows.map((r) => ({ ...r, recorded_at: recordDate }));
-    for (let i = 0; i < rowsWithDate.length; i += 500) {
-      const { error } = await supabase.from('inventory_records').insert(rowsWithDate.slice(i, i + 500));
-      if (error) { setInvMsg(`❌ 匯入失敗：${error.message}`); setInvImporting(false); return; }
+    const BATCH = 500;
+    const totalBatches = Math.ceil(rowsWithDate.length / BATCH);
+    let totalInserted = 0;
+    for (let i = 0; i < rowsWithDate.length; i += BATCH) {
+      const batch = rowsWithDate.slice(i, i + BATCH);
+      const batchNum = Math.floor(i / BATCH) + 1;
+      setInvMsg(`⏳ 步驟 3/4：寫入中（${batchNum}/${totalBatches} 批，已寫 ${totalInserted}/${rowsWithDate.length} 筆）...`);
+      const { data: inserted, error: insErr } = await supabase
+        .from('inventory_records').insert(batch).select('id');
+      if (insErr) {
+        setInvMsg(`❌ 第 ${batchNum} 批寫入失敗：${insErr.message}（已寫 ${totalInserted} 筆，匯入中止）`);
+        setInvImporting(false); return;
+      }
+      const actual = inserted?.length ?? 0;
+      if (actual !== batch.length) {
+        setInvMsg(`❌ 第 ${batchNum} 批無聲失敗：預期 ${batch.length} 筆，實際寫入 ${actual} 筆（匯入中止）`);
+        setInvImporting(false); return;
+      }
+      totalInserted += actual;
     }
 
-    // ── 步驟 4：分頁抓取 DB 完整資料，與 Excel 逐 SKU 比對 ──
-    // （不分頁的 SELECT 會被 Supabase 截斷在預設上限，造成誤報）
+    // ── 步驟 4：分頁讀取 DB 全量（每頁 1000 筆），逐 SKU 比對 ──
+    setInvMsg('⏳ 步驟 4/4：從資料庫驗證...');
     const allDbRows: Array<{ external_sku: string; quantity: number }> = [];
     {
       const PAGE = 1000;
@@ -3515,40 +3577,39 @@ function ImportPage() {
         from += PAGE;
       }
     }
-    const dbTotal = allDbRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+    const dbQty = allDbRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
 
-    // 彙整 DB per-SKU 總量
+    // 逐 SKU 比對
     const dbBySku = new Map<string, number>();
     for (const r of allDbRows) {
       const sku = String(r.external_sku || '');
       dbBySku.set(sku, (dbBySku.get(sku) ?? 0) + Number(r.quantity ?? 0));
     }
-    // 彙整 Excel per-SKU 總量
     const parsedBySku = new Map<string, number>();
     for (const r of invRows) {
       const sku = String(r.external_sku || '');
       parsedBySku.set(sku, (parsedBySku.get(sku) ?? 0) + Number(r.quantity ?? 0));
     }
-    // 找出差異
-    const allSkus = new Set([...parsedBySku.keys(), ...dbBySku.keys()]);
+    const allSkusSet = new Set([...parsedBySku.keys(), ...dbBySku.keys()]);
     const diffs: Array<{ sku: string; parsed: number; db: number; diff: number }> = [];
-    for (const sku of allSkus) {
+    for (const sku of allSkusSet) {
       const p = parsedBySku.get(sku) ?? 0;
       const d = dbBySku.get(sku) ?? 0;
       if (p !== d) diffs.push({ sku, parsed: p, db: d, diff: d - p });
     }
     diffs.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
 
-    const ok = parsedTotal === dbTotal && invRows.length === allDbRows.length;
+    const ok = dbQty === excelQty && allDbRows.length === invRows.length;
     setInvValidation({
       date: recordDate, parsedSkus: skus.length,
-      parsedRows: invRows.length, parsedTotal,
-      dbRows: allDbRows.length, dbTotal,
-      ok, topDiffs: diffs.slice(0, 10), deleteVerified,
+      parsedRows: invRows.length, parsedQty, parsedAmount: parsedAmt,
+      excelQty, excelAmount: excelAmt,
+      dbRows: allDbRows.length, dbQty,
+      ok, deleteVerified, topDiffs: diffs.slice(0, 10),
     });
     setInvMsg(ok
-      ? `✓ 匯入成功：${recordDate} 共 ${invRows.length} 筆，總件數 ${parsedTotal.toLocaleString('zh-TW')} 件，與 Excel 完全一致。`
-      : `⚠ 匯入完成但發現差異：Excel 總件數 ${parsedTotal.toLocaleString('zh-TW')}，DB 總件數 ${dbTotal.toLocaleString('zh-TW')}，差異 ${(dbTotal - parsedTotal).toLocaleString('zh-TW')} 件。請查看比對報告。`
+      ? `✅ 匯入完成驗證通過：${recordDate} 共 ${invRows.length} 筆，${dbQty.toLocaleString('zh-TW')} 件，與 Excel 總計完全一致。`
+      : `⚠ 匯入完成但發現差異：DB ${dbQty.toLocaleString('zh-TW')} 件 vs Excel ${excelQty.toLocaleString('zh-TW')} 件，請查看比對報告。`
     );
     setInvRows([]);
     setInvImporting(false);
@@ -3608,13 +3669,14 @@ function ImportPage() {
           {invMsg && <p className="mt-3 text-sm text-slate-600">{invMsg}</p>}
         </form>
         {invRows.length > 0 && (() => {
-          const parsedTotal = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+          const parsedQty = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+          const parsedAmt = invRows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
           return (
             <div className="mt-4 rounded-lg border border-slate-100 p-4">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm text-slate-500">{invFile}｜盤點日期 {recordDate}｜{new Set(invRows.map((r) => r.external_sku)).size} 個 SKU｜{invRows.length.toLocaleString('zh-TW')} 筆</p>
-                  <p className="mt-0.5 text-base font-semibold text-ink">解析總件數：{parsedTotal.toLocaleString('zh-TW')} 件</p>
+                  <p className="mt-0.5 text-base font-semibold text-ink">解析總件數：{parsedQty.toLocaleString('zh-TW')} 件{parsedAmt > 0 ? `　總金額：${formatCurrency(parsedAmt)}` : ''}</p>
                   <p className="mt-1 text-xs text-amber-600">⚠ 將刪除 {recordDate} 的全部舊庫存記錄後重新寫入，其他日期不受影響</p>
                 </div>
                 <div className="flex gap-2">
@@ -3647,21 +3709,26 @@ function ImportPage() {
             <p className={`font-semibold ${invValidation.ok ? 'text-moss' : 'text-amber-700'}`}>
               {invValidation.ok ? '✅ 匯入比對通過' : '⚠️ 匯入比對發現差異'}
             </p>
-            <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+              <div className="rounded-md bg-white p-3 shadow-sm">
+                <p className="text-xs text-slate-400">Excel 總計（原始）</p>
+                <p className="mt-0.5 text-lg font-semibold text-ink">{invValidation.excelQty.toLocaleString('zh-TW')} 件</p>
+                <p className="text-xs text-slate-400">{invValidation.excelAmount > 0 ? formatCurrency(invValidation.excelAmount) : '—'}</p>
+              </div>
               <div className="rounded-md bg-white p-3 shadow-sm">
                 <p className="text-xs text-slate-400">Excel 解析件數</p>
-                <p className="mt-0.5 text-lg font-semibold text-ink">{invValidation.parsedTotal.toLocaleString('zh-TW')} 件</p>
+                <p className="mt-0.5 text-lg font-semibold text-ink">{invValidation.parsedQty.toLocaleString('zh-TW')} 件</p>
                 <p className="text-xs text-slate-400">{invValidation.parsedRows} 筆 / {invValidation.parsedSkus} 個 SKU</p>
               </div>
               <div className="rounded-md bg-white p-3 shadow-sm">
                 <p className="text-xs text-slate-400">資料庫寫入件數</p>
-                <p className={`mt-0.5 text-lg font-semibold ${invValidation.ok ? 'text-moss' : 'text-amber-600'}`}>{invValidation.dbTotal.toLocaleString('zh-TW')} 件</p>
+                <p className={`mt-0.5 text-lg font-semibold ${invValidation.ok ? 'text-moss' : 'text-amber-600'}`}>{invValidation.dbQty.toLocaleString('zh-TW')} 件</p>
                 <p className="text-xs text-slate-400">{invValidation.dbRows} 筆</p>
               </div>
               <div className="rounded-md bg-white p-3 shadow-sm">
-                <p className="text-xs text-slate-400">差異</p>
+                <p className="text-xs text-slate-400">差異（DB − Excel）</p>
                 <p className={`mt-0.5 text-lg font-semibold ${invValidation.ok ? 'text-moss' : 'text-red-600'}`}>
-                  {invValidation.ok ? '無差異' : `${(invValidation.dbTotal - invValidation.parsedTotal > 0 ? '+' : '')}${(invValidation.dbTotal - invValidation.parsedTotal).toLocaleString('zh-TW')} 件`}
+                  {invValidation.ok ? '無差異' : `${(invValidation.dbQty - invValidation.excelQty > 0 ? '+' : '')}${(invValidation.dbQty - invValidation.excelQty).toLocaleString('zh-TW')} 件`}
                 </p>
                 <p className="text-xs text-slate-400">刪除驗證：{invValidation.deleteVerified ? '✓ 通過' : '✗ 失敗'}</p>
               </div>
