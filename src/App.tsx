@@ -638,6 +638,13 @@ function ProductDetailPage() {
   const attributedTotal = allAttributedCosts.reduce((s, c) => s + costTotal(c), 0);
   const fullTotal = directTotal + attributedTotal;
   const totalQty = productBatches.reduce((s, b) => s + (Number(b.quantity) || 0), 0);
+  // 重複計算偵測：本商品的費用，但 attributed_to_batch_id 指向其他商品的批次
+  // 這些費用會同時出現在「本商品直接費用」和「其他商品的歸入配件費用」中
+  const crossProductCosts = productCosts.filter((c) => {
+    if (!c.attributed_to_batch_id) return false;
+    const attrBatch = batches.rows.find((b) => b.id === c.attributed_to_batch_id);
+    return attrBatch && attrBatch.product_id !== id;
+  });
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
@@ -780,6 +787,24 @@ function ProductDetailPage() {
       </div>
 
       <section>
+        {crossProductCosts.length > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-semibold text-amber-700">⚠️ 偵測到重複計算，請確認以下費用的歸屬</p>
+            <p className="mt-0.5 text-xs text-amber-600">以下費用的「採購批次」屬於本商品，但「歸屬批次」指向其他商品，導致此費用同時計入兩個商品的成本：</p>
+            <ul className="mt-2 space-y-1">
+              {crossProductCosts.map((c) => {
+                const attrBatch = batches.rows.find((b) => b.id === c.attributed_to_batch_id);
+                const attrProd = attrBatch ? products.rows.find((p) => p.id === attrBatch.product_id) : null;
+                return (
+                  <li key={c.id} className="text-xs text-amber-700">
+                    • {c.description || costTypeLabel(c.type)} {formatCurrency(costTotal(c))} → 歸入「{attrProd?.name ?? '?'}」{attrBatch?.name ?? ''}
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="mt-2 text-xs text-amber-500">請編輯這些費用，將「歸屬批次」改為本商品的批次，或將「採購批次」清空。</p>
+          </div>
+        )}
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-base font-semibold text-ink">批次費用明細</h3>
           <div className="flex gap-3">
@@ -1465,16 +1490,17 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
           )}
         </label>
 
-        {/* 採購批次 */}
+        {/* 採購批次（只顯示選定商品的批次，防止跨商品指定） */}
         <label className="text-sm">採購批次
           <select value={data.batch_id ?? ''} onChange={(e) => setData({ ...data, batch_id: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2">
             <option value="">請選擇</option>
-            {batches.map((b) => {
-                const prod = products.find((p) => p.id === b.product_id);
-                const prodLabel = prod ? `${prod.sku ? prod.sku + ' ' : ''}${prod.name}` : '';
-                return <option key={b.id} value={b.id}>{prodLabel ? `${prodLabel}｜` : ''}{b.name || b.batch_no}</option>;
-              })}
+            {batches.filter((b) => !data.product_id || b.product_id === data.product_id).map((b) => (
+              <option key={b.id} value={b.id}>{b.name || b.batch_no}</option>
+            ))}
           </select>
+          {data.product_id && batches.filter((b) => b.product_id === data.product_id).length === 0 && (
+            <p className="mt-1 text-xs text-slate-400">此商品尚無批次</p>
+          )}
         </label>
 
         {/* 費用類型 */}
@@ -1544,7 +1570,10 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
             if (!attrBatch) return null;
             const isDiff = data.attributed_to_batch_id !== data.batch_id;
             return isDiff ? (
-              <p className="mt-1 text-xs text-moss">✓ 此費用將歸入「{attrProd?.name ?? '未知商品'}」批次「{attrBatch.name}」的完整成本</p>
+              <div className="mt-1 space-y-0.5">
+                <p className="text-xs text-moss">✓ 此費用將歸入「{attrProd?.name ?? '未知商品'}」批次「{attrBatch.name}」的完整成本</p>
+                <p className="text-xs text-amber-600">⚠ 此費用將只計入目標商品成本，不會出現在本商品的費用明細</p>
+              </div>
             ) : (
               <p className="mt-1 text-xs text-slate-400">歸屬批次與採購批次相同（預設）</p>
             );

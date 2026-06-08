@@ -93,9 +93,58 @@
 
 ---
 
+## 四層防護架構
+
+### 第一層：資料庫觸發器（最底層）
+PostgreSQL BEFORE INSERT/UPDATE trigger 確保：
+若同時設定了 `batch_id` 和 `product_id`，則 `batch_id` 對應的批次必須屬於同一個 `product_id`。
+
+```sql
+CREATE OR REPLACE FUNCTION check_batch_product_consistency()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.batch_id IS NOT NULL AND NEW.product_id IS NOT NULL THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM product_batches
+      WHERE id = NEW.batch_id AND product_id = NEW.product_id
+    ) THEN
+      RAISE EXCEPTION 'batch_id 和 product_id 不一致：批次不屬於指定商品';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### 第二層：表單防護（CostForm）
+- **採購批次選單**：只顯示選定商品的批次（`b.product_id === data.product_id`），防止跨商品指定
+- **歸屬批次提示**：若歸屬批次指向其他商品，顯示警告：
+  > ⚠ 此費用將只計入目標商品成本，不會出現在本商品的費用明細
+
+### 第三層：顯示層偵測（ProductDetailPage）
+頁面載入時自動計算 `crossProductCosts`：
+
+```typescript
+const crossProductCosts = productCosts.filter((c) => {
+  if (!c.attributed_to_batch_id) return false;
+  const attrBatch = batches.rows.find((b) => b.id === c.attributed_to_batch_id);
+  return attrBatch && attrBatch.product_id !== id;
+});
+```
+
+若 `crossProductCosts.length > 0`，在「批次費用明細」上方顯示警告橫幅：
+> ⚠️ 偵測到重複計算，請確認以下費用的歸屬
+
+### 第四層：邏輯互斥（`attributedCostIds` Set）
+`attributedByBatch`（其他商品歸入本商品的費用）與 `productCosts`（本商品直接費用）使用
+`attributedCostIds` Set 確保完全互斥，不會在兩個區塊重複顯示同一筆費用。
+
+---
+
 ## 版本記錄
 
 | 日期 | 變更 |
 |------|------|
 | 2026-06-08 | 初版：從 product 層級歸屬升級為 batch 層級歸屬 |
 | 2026-06-08 | 保留 `attributed_to_product_id` 舊版欄位相容 |
+| 2026-06-08 | 新增四層防護架構（DB trigger、表單篩選、提示文字、顯示層偵測） |
