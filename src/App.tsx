@@ -767,7 +767,7 @@ function ProductDetailPage() {
           </div>
           <div className="border-t pt-3 text-sm text-slate-500 space-y-1">
             <div className="flex justify-between"><span>直接費用（{productCosts.length} 筆）</span><span className="font-medium text-slate-700">{formatCurrency(directTotal)}</span></div>
-            {attributedTotal > 0 && <div className="flex justify-between"><span>歸入配件費用（{attributedCosts.length} 筆）</span><span className="font-medium text-moss">{formatCurrency(attributedTotal)}</span></div>}
+            {attributedTotal > 0 && <div className="flex justify-between"><span>歸入配件費用（{allAttributedCosts.length} 筆）</span><span className="font-medium text-moss">{formatCurrency(attributedTotal)}</span></div>}
           </div>
           <p className="text-xs text-slate-400">各批次明細詳見下方</p>
         </section>
