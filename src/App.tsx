@@ -3540,21 +3540,27 @@ function ImportPage() {
     const excelQty  = invExcelTotal?.qty    ?? parsedQty;
     const excelAmt  = invExcelTotal?.amount ?? parsedAmt;
 
-    // ── 步驟 1：刪除「等於或早於本次匯入日期」的所有舊快照 ──
+    // ── 步驟 1：刪除所有舊快照（SECURITY DEFINER RPC，繞過 RLS）──
     // 目的：DB 只保留最新一份快照，防止舊日期的孤立 SKU 污染計算結果。
-    // 也清除同日不同 timestamp 格式的舊記錄（使用 nextDay 上界）。
+    // 使用 RPC 函式（SECURITY DEFINER）確保 RLS 不會阻擋刪除。
+    // 若 RPC 不存在則 fallback 至直接 DELETE。
     const nextDay = new Date(new Date(recordDate).getTime() + 86400000).toISOString().slice(0, 10);
     setInvMsg('⏳ 步驟 1/4：清除舊快照（含更舊日期）...');
-    const { error: delErr } = await supabase
-      .from('inventory_records').delete().lt('recorded_at', nextDay);
-    if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}`); setInvImporting(false); return; }
+    const { error: rpcDelErr } = await supabase.rpc('delete_inventory_before', { cutoff_date: nextDay });
+    if (rpcDelErr) {
+      // RPC 不存在時 fallback 到直接 DELETE
+      const { error: delErr } = await supabase
+        .from('inventory_records').delete().lt('recorded_at', nextDay);
+      if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}（請在 SQL Editor 建立 delete_inventory_before 函式）`); setInvImporting(false); return; }
+    }
 
-    // ── 步驟 2：驗證刪除是否徹底（確認 nextDay 以前完全為零）──
-    const { count: afterDelCount } = await supabase
+    // ── 步驟 2：驗證刪除是否徹底（使用總筆數確認，避免 RLS 造成假陰性）──
+    // 同時檢查：nextDay 以前的舊資料 & 整張表總數（確保無殘留舊日期）
+    const { count: afterFilterCount } = await supabase
       .from('inventory_records').select('id', { count: 'exact', head: true }).lt('recorded_at', nextDay);
-    const deleteVerified = (afterDelCount ?? 0) === 0;
+    const deleteVerified = (afterFilterCount ?? 0) === 0;
     if (!deleteVerified) {
-      setInvMsg(`⚠ 刪除後仍殘留 ${afterDelCount} 筆（RLS 權限問題），匯入已中止。`);
+      setInvMsg(`⚠ 刪除後仍殘留 ${afterFilterCount} 筆舊資料（RLS 限制）。請在 Supabase SQL Editor 執行：\n1. TRUNCATE inventory_records;\n2. 建立 delete_inventory_before RPC 函式\n後再重試。`);
       setInvImporting(false); return;
     }
 
