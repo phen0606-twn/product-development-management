@@ -3523,17 +3523,18 @@ function ImportPage() {
     const excelQty  = invExcelTotal?.qty    ?? parsedQty;
     const excelAmt  = invExcelTotal?.amount ?? parsedAmt;
 
-    // ── 步驟 1：刪除同日所有舊紀錄（不限 SKU，確保完整替換）──
-    // 使用日期範圍 [date, nextDay) 以同時清除精確日期字串和 timestamp 格式的舊紀錄
+    // ── 步驟 1：刪除「等於或早於本次匯入日期」的所有舊快照 ──
+    // 目的：DB 只保留最新一份快照，防止舊日期的孤立 SKU 污染計算結果。
+    // 也清除同日不同 timestamp 格式的舊記錄（使用 nextDay 上界）。
     const nextDay = new Date(new Date(recordDate).getTime() + 86400000).toISOString().slice(0, 10);
-    setInvMsg('⏳ 步驟 1/4：清除舊資料...');
+    setInvMsg('⏳ 步驟 1/4：清除舊快照（含更舊日期）...');
     const { error: delErr } = await supabase
-      .from('inventory_records').delete().gte('recorded_at', recordDate).lt('recorded_at', nextDay);
+      .from('inventory_records').delete().lt('recorded_at', nextDay);
     if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}`); setInvImporting(false); return; }
 
-    // ── 步驟 2：驗證刪除是否徹底（同樣使用日期範圍）──
+    // ── 步驟 2：驗證刪除是否徹底（確認 nextDay 以前完全為零）──
     const { count: afterDelCount } = await supabase
-      .from('inventory_records').select('id', { count: 'exact', head: true }).gte('recorded_at', recordDate).lt('recorded_at', nextDay);
+      .from('inventory_records').select('id', { count: 'exact', head: true }).lt('recorded_at', nextDay);
     const deleteVerified = (afterDelCount ?? 0) === 0;
     if (!deleteVerified) {
       setInvMsg(`⚠ 刪除後仍殘留 ${afterDelCount} 筆（RLS 權限問題），匯入已中止。`);
