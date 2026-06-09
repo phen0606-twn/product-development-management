@@ -4052,9 +4052,13 @@ function monthsInRange(start: string, end: string) {
 
 function shiftMonth(date: string, offset: number) {
   const [y, m, d] = date.split('-').map(Number);
+  const srcLast = new Date(y, m, 0).getDate(); // 來源月份最後一天
   const n = new Date(y, m - 1 + offset, 1);
-  const last = new Date(n.getFullYear(), n.getMonth() + 1, 0).getDate();
-  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+  const tgtLast = new Date(n.getFullYear(), n.getMonth() + 1, 0).getDate();
+  // 若輸入是月底最後一天（如 6/30），輸出也應是目標月最後一天（5/31），
+  // 否則保留原日（不超出目標月上限）。
+  const outDay = (d === srcLast) ? tgtLast : Math.min(d, tgtLast);
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(outDay).padStart(2, '0')}`;
 }
 
 function shiftYear(date: string, offset: number) {
