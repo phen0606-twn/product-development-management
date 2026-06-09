@@ -2732,6 +2732,23 @@ function InventoryPage() {
         </div>
       </section>
 
+      {/* ── 暫時 debug 面板 ── */}
+      {(() => {
+        const byDate = new Map<string, number>();
+        for (const r of inventory.rows) {
+          const d = String(r.recorded_at || '').slice(0, 10);
+          byDate.set(d, (byDate.get(d) ?? 0) + Number(r.quantity ?? 0));
+        }
+        const rows = [...byDate.entries()].sort().reverse();
+        return (
+          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-xs font-mono">
+            <b>DEBUG</b> — inventory.rows: {inventory.rows.length} 筆 | snapshotTotal: {snapshotTotal} | totalStock: {totalStock} | globalLatest: {latestSnapshotDate}
+            <br />各日期加總: {rows.map(([d, q]) => `${d}=${q}`).join('  |  ')}
+          </div>
+        );
+      })()}
+      {/* ── end debug ── */}
+
       <div className="grid gap-3 md:grid-cols-4">
         <Card label={`目前庫存量${latestSnapshotDate ? `（${latestSnapshotDate} 快照後自動扣銷）` : ''}`} value={`${totalStock.toLocaleString('zh-TW')} 件`} compact tone="lime" />
         <Card label="庫存成本金額" value={formatCurrency(totalInventoryValue)} compact />
