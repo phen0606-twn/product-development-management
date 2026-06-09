@@ -371,14 +371,92 @@ def abort_with_format_error(issue: str, first_data_rows: list):
 
 ---
 
+---
+
+## 六、業績匯入冪等性規範（週資料累加）
+
+### 業績 vs 庫存的根本差異
+
+| | 庫存 | 業績 |
+|--|------|------|
+| 資料性質 | 每次是全量快照 | 每次是一週增量 |
+| 匯入語意 | 覆蓋同日期全部舊資料 | 同週覆蓋，不同週累加 |
+| 唯一識別 | `recorded_at`（快照日） | `sold_at`（業績日期，週末日） |
+
+### 業績 `sold_at` 設定規則
+
+| 資料類型 | `sold_at` 值 | 說明 |
+|---------|-------------|------|
+| 每週 Excel 上傳 | 使用者指定的「業績日期（週末日）」，精確到日 | 例如 `2026-06-08`（週日） |
+| 多工作表年度彙總（N月命名） | `monthEnd(YYYY-MM)`，從 sheet 名稱解析 | 例如 `2025-06-30` |
+| 年度欄位格式（YY-MM銷額） | `monthEnd(20YY-MM)`，從欄位名稱解析 | 例如 `2025-06-30` |
+
+**⚠ 舊版錯誤（已修正 2026-06-09）：** 單一 sheet 格式原本使用 `monthEnd(fallbackMonth)`，導致同月所有週的 `sold_at` 相同 → 重複匯入全部累加。現已改為直接使用精確日期。
+
+### 匯入流程（DELETE + INSERT，保證冪等）
+
+```
+步驟 1：查詢 DB 各 sold_at 的現有筆數（判斷新增 vs 覆蓋）
+步驟 2：DELETE FROM sales_records WHERE sold_at IN (本次 soldDates)
+         同時刪除 channel_sales_records / channel_store_sales_records / product_store_sales
+步驟 3：INSERT 新資料
+步驟 4：驗證 DB 計數 = 預期筆數
+```
+
+**為何用 DELETE+INSERT 而非 UPSERT：**
+整週資料要完整替換（包含已刪除的 SKU）。若用 UPSERT，舊週中已下架的 SKU 不會被清除。DELETE+INSERT 語意更正確。
+
+### 匯入結果報告格式
+
+匯入完成後必須顯示：
+
+```
+✅ 匯入完成
+🟢 新增 X 筆（2026-06-08）        ← 首次匯入的新週
+🔄 覆蓋 Y 筆（取代舊有 Z 筆，日期：2026-06-01）  ← 重複上傳的舊週
+⚪ 略過 W 筆（空白或無效列）
+```
+
+### parseSales 回傳格式
+
+```typescript
+{
+  salesRows: Row[];          // 商品業績記錄
+  channelRows: Row[];        // 通路彙總
+  storeRows: Row[];          // 門市彙總
+  productStoreRows: Row[];   // 商品×門市明細
+  skipped: number;           // 略過的空白/無效列數
+}
+```
+
+### 已知格式 × sold_at 對應
+
+| Excel 格式 | 辨識方式 | sold_at |
+|-----------|---------|---------|
+| 多工作表年度（5月/6月…） | `sheetNames.filter(n => /^\d{1,2}月$/)` > 1 | `monthEnd(year + sheetMonth)` |
+| 年度欄位格式 | headers 含 `'YY-MM銷額'` | `monthEnd('20YY-MM')` |
+| 各部門業績明細表 | header 含「商品」+「實售總金額」+「銷售總成本」 | 從表頭解析週期文字 |
+| 一般週上傳 | 其他 | `fallbackDate`（使用者選擇的精確日期） |
+
+---
+
 ## 五、版本記錄
 
 | 日期 | 版本 | 說明 |
 |------|------|------|
 | 2026-06-03 | v1.0 | 初版，基於 `20260501-0531各部門業績明細表.xlsx` 建立 |
+| 2026-06-09 | v2.0 | 業績冪等性規範；parseSales 修正 sold_at 為精確日期；加入 skipped 計數；匯入結果報告（新增/覆蓋/略過）|
 
 **關鍵修復記錄（2026-06-03）：**
 - 舊解析器誤判格式為「商品優先」，導致 A000 網路官網（$330,037）被跳過
 - channel_sales_records 網路官網/平台 從 $205,465 修正為 $535,502
 - 一致性警告從 16% 差異降為 0%
 - 輔大捷運店、蝦皮倉重複 16 筆問題透過去重合併解決
+
+**關鍵修復記錄（2026-06-09）：**
+- `parseSales` 單一 sheet 格式改用精確日期（`fallbackDate`）而非 `monthEnd(fallbackMonth)`，防止同月多週資料用相同 `sold_at` 互相覆蓋
+- 匯入 UI 日期輸入從 `type="month"` 改為 `type="date"`（週末日）
+- 匯入結果新增「新增 / 覆蓋 / 略過」三分類報告
+- `parseSales` 加入 `skipped` 計數，回傳完整結構 `{ salesRows, channelRows, storeRows, productStoreRows, skipped }`
+- `parseSales` 支援多工作表年度格式（每 sheet 以 N月 命名）
+- `parseSales` header 辨識加入 `商品型號`、`品名規格`、`實售金額`

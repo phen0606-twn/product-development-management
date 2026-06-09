@@ -3395,7 +3395,8 @@ function ImportPage() {
   const [storeRows, setStoreRows] = useState<Row[]>([]);
   const [productStoreRows, setProductStoreRows] = useState<Row[]>([]);
   const [salesFile, setSalesFile] = useState('');
-  const [importMonth, setImportMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [salesSkipped, setSalesSkipped] = useState(0);
+  const [importDate, setImportDate] = useState(new Date().toISOString().slice(0, 10));
   const [salesImporting, setSalesImporting] = useState(false);
   const totalRevenue = salesRows.reduce((s, r) => s + Number(r.revenue ?? 0), 0);
   const totalQty = salesRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
@@ -3421,30 +3422,40 @@ function ImportPage() {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const file = form.get('file');
-    const month = String(form.get('month'));
+    const date = String(form.get('date'));
     if (!(file instanceof File)) return;
-    setImportMonth(month);
+    setImportDate(date);
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-    const parsed = parseSalesImport(workbook, XLSX.utils, month);
+    const parsed = parseSalesImport(workbook, XLSX.utils, date);
     setSalesRows(parsed.salesRows); setChannelRows(parsed.channelRows);
     setStoreRows(parsed.storeRows); setProductStoreRows(parsed.productStoreRows);
+    setSalesSkipped(parsed.skipped);
     setSalesFile(file.name);
-    if (!parsed.salesRows.length) { setSalesMsg('沒有解析到資料，請確認格式。'); return; }
+    if (!parsed.salesRows.length) {
+      setSalesMsg(`沒有解析到資料（略過 ${parsed.skipped} 筆空白列），請確認格式。`);
+      return;
+    }
 
     // ── 冪等性預檢：查詢 DB 是否已有相同日期資料 ──
-    let baseMsg = `已解析 ${parsed.salesRows.length} 筆商品業績、${parsed.storeRows.length} 筆門市業績，請確認後匯入。`;
+    const dates = [...new Set(parsed.salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
+    let baseMsg = `已解析 ${parsed.salesRows.length} 筆商品業績`;
+    if (parsed.storeRows.length) baseMsg += `、${parsed.storeRows.length} 筆門市業績`;
+    if (parsed.skipped > 0) baseMsg += `（略過 ${parsed.skipped} 筆空白列）`;
+    baseMsg += `。涵蓋日期：${dates.join('、')}。`;
     if (supabase) {
-      const dates = [...new Set(parsed.salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
       const checks = await Promise.all(
         dates.map((d) => supabase!.from('sales_records').select('id', { count: 'exact', head: true }).eq('sold_at', d))
       );
       const existing = dates.map((d, i) => ({ date: d, count: checks[i].count ?? 0 })).filter((x) => x.count > 0);
       if (existing.length > 0) {
-        const warn = existing.map((x) => `${x.date}（${x.count} 筆）`).join('、');
-        baseMsg += ` ⚠ 資料庫已有相同日期：${warn}，匯入將自動覆蓋，不會重複計算。`;
+        const warn = existing.map((x) => `${x.date}（已有 ${x.count} 筆）`).join('、');
+        baseMsg += ` ⚠ 以下日期已有舊資料將被覆蓋：${warn}。`;
+      } else {
+        baseMsg += ` ✓ 全部為新日期，不覆蓋任何舊資料。`;
       }
     }
+    baseMsg += ' 確認無誤後請匯入。';
     setSalesMsg(baseMsg);
   }
 
@@ -3453,7 +3464,17 @@ function ImportPage() {
     setSalesImporting(true);
     const soldDates = [...new Set(salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
 
-    // ── 防線 1：逐一刪除並檢查 error，任一失敗立即中止 ──
+    // ── 步驟 1：記錄各日期在 DB 的現有筆數（用來判斷是新增還是覆蓋）──
+    setSalesMsg('⏳ 步驟 1/3：確認現有資料...');
+    const existingChecks = await Promise.all(
+      soldDates.map((d) => supabase!.from('sales_records').select('id', { count: 'exact', head: true }).eq('sold_at', d))
+    );
+    const existingByDate = new Map(soldDates.map((d, i) => [d, existingChecks[i].count ?? 0]));
+    const overwriteDates = soldDates.filter((d) => (existingByDate.get(d) ?? 0) > 0);
+    const newDates       = soldDates.filter((d) => (existingByDate.get(d) ?? 0) === 0);
+
+    // ── 步驟 2：逐一刪除舊資料（相同日期全部清除），任一失敗立即中止 ──
+    setSalesMsg(`⏳ 步驟 2/3：清除${overwriteDates.length > 0 ? `舊資料（${overwriteDates.join('、')}）` : '（無舊資料需清除）'}...`);
     const TABLES_TO_DELETE = [
       { table: 'sales_records',              col: 'sold_at'     },
       { table: 'channel_sales_records',       col: 'sales_month' },
@@ -3471,23 +3492,35 @@ function ImportPage() {
       }
     }
 
-    // ── 插入 ──
+    // ── 步驟 3：插入新資料 ──
+    setSalesMsg(`⏳ 步驟 3/3：寫入 ${salesRows.length} 筆資料...`);
     const { error } = await supabase.from('sales_records').insert(salesRows);
     if (error) { setSalesMsg(`❌ 匯入失敗：${error.message}`); setSalesImporting(false); return; }
     if (channelRows.length) await supabase.from('channel_sales_records').insert(channelRows);
     if (storeRows.length) await supabase.from('channel_store_sales_records').insert(storeRows);
     if (productStoreRows.length) await supabase.from('product_store_sales').insert(productStoreRows);
 
-    // ── 防線 2：驗證 DB 計數與預期一致 ──
+    // ── 驗證：確認 DB 筆數與預期一致 ──
     const { count: dbCount } = await supabase
       .from('sales_records').select('id', { count: 'exact', head: true }).in('sold_at', soldDates);
-    const dateLabel = soldDates.join('、') || importMonth;
     if (dbCount !== salesRows.length) {
-      setSalesMsg(`⚠ 匯入完成但數量異常：預期 ${salesRows.length} 筆，資料庫實際 ${dbCount} 筆（${dateLabel}）。請聯絡管理員確認。`);
-    } else {
-      setSalesMsg(`✓ 已匯入並驗證 ${dateLabel} 業績（${dbCount} 筆），數量正確。`);
+      setSalesMsg(`⚠ 匯入完成但數量異常：預期 ${salesRows.length} 筆，資料庫實際 ${dbCount} 筆。請聯絡管理員確認。`);
+      setSalesImporting(false);
+      return;
     }
+
+    // ── 結果報告 ──
+    const newCount       = salesRows.filter((r) => newDates.includes(String(r.sold_at || ''))).length;
+    const overwriteCount = salesRows.filter((r) => overwriteDates.includes(String(r.sold_at || ''))).length;
+    const oldTotal       = overwriteDates.reduce((s, d) => s + (existingByDate.get(d) ?? 0), 0);
+    const parts: string[] = [];
+    if (newCount > 0)       parts.push(`🟢 新增 ${newCount} 筆（${newDates.join('、')}）`);
+    if (overwriteCount > 0) parts.push(`🔄 覆蓋 ${overwriteCount} 筆（取代舊有 ${oldTotal} 筆，日期：${overwriteDates.join('、')}）`);
+    if (salesSkipped > 0)   parts.push(`⚪ 略過 ${salesSkipped} 筆（空白或無效列）`);
+    setSalesMsg(`✅ 匯入完成｜${parts.join('　')}`);
+
     setSalesRows([]); setChannelRows([]); setStoreRows([]); setProductStoreRows([]);
+    setSalesSkipped(0);
     setSalesImporting(false);
   }
 
@@ -3655,7 +3688,7 @@ function ImportPage() {
         <h3 className="mb-4 font-semibold">業績匯入</h3>
         <form onSubmit={previewSales}>
           <div className="grid gap-3 md:grid-cols-3">
-            <label className="text-sm">匯入月份<input name="month" type="month" defaultValue={importMonth} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
+            <label className="text-sm">業績日期（週末日）<input name="date" type="date" defaultValue={importDate} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
             <label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
           </div>
           <button className="mt-4 rounded-md bg-sun px-4 py-2 text-sm text-white">預覽業績資料</button>
@@ -4104,15 +4137,16 @@ function parseNumber(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseSalesImport(workbook: any, utils: any, fallbackMonth: string) {
+function parseSalesImport(workbook: any, utils: any, fallbackDate: string) {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false }) as unknown[][];
   const headerIndex = rows.findIndex((r) => r.some((c) => String(c).trim() === '商品') && r.some((c) => String(c).trim() === '實售總金額'));
   const headers = headerIndex >= 0 ? rows[headerIndex].map((c) => String(c).trim()) : [];
   if (headers.includes('銷售總成本') && headers.some((h) => h.includes('毛利'))) {
-    return parseDepartmentSales(rows, fallbackMonth, headerIndex);
+    const result = parseDepartmentSales(rows, fallbackDate, headerIndex);
+    return { ...result, skipped: 0 };
   }
-  return { salesRows: parseSales(workbook, utils, fallbackMonth), channelRows: [], storeRows: [], productStoreRows: [] };
+  return parseSales(workbook, utils, fallbackDate);
 }
 
 const STORE_HEADER_RE = /^(A\d{3}|E\d{3}|000\d{3})\s+/;
@@ -4281,14 +4315,14 @@ function periodEndDate(text: string) {
   return `${year}-${match[5]}-${match[6]}`;
 }
 
-function parseSales(workbook: any, utils: any, fallbackMonth: string) {
+function parseSales(workbook: any, utils: any, fallbackDate: string) {
   // ── 格式 A：多工作表每月明細（每個 sheet 以「N月」命名，如 5月、12月）──
-  // 欄位固定：商品型號 | 品名規格 | 數量 | 應售金額 | 實售金額 | ...
-  // 年份從 fallbackMonth 取得（例如 importMonth = '2025-05' → year = '2025'）
+  // sold_at = 各月月底（monthEnd）；年份從 fallbackDate 的前4字取得
   const monthSheetNames = workbook.SheetNames.filter((n: string) => /^\d{1,2}月$/.test(n.trim()));
   if (monthSheetNames.length > 1) {
-    const year = fallbackMonth.slice(0, 4);
-    return monthSheetNames.flatMap((sheetName: string) => {
+    const year = fallbackDate.slice(0, 4);
+    let skipped = 0;
+    const salesRows = monthSheetNames.flatMap((sheetName: string) => {
       const monthNum = parseInt(sheetName.trim());
       const ym = `${year}-${String(monthNum).padStart(2, '0')}`;
       const soldAt = monthEnd(ym);
@@ -4298,42 +4332,54 @@ function parseSales(workbook: any, utils: any, fallbackMonth: string) {
         const name = String((r as any)[1] ?? '').trim();
         const qty  = parseNumber((r as any)[2]);
         const rev  = parseNumber((r as any)[4]); // 實售金額
-        if ((!sku && !name) || (!rev && !qty)) return [];
+        if ((!sku && !name) || (!rev && !qty)) { skipped++; return []; }
         return [{ product_id: null, external_sku: sku, external_product_name: name,
           sold_at: soldAt, quantity: qty, revenue: rev, channel: null, notes: null }];
       });
     });
+    return { salesRows, channelRows: [], storeRows: [], productStoreRows: [], skipped };
   }
 
-  // ── 格式 B / C：單一工作表（原有邏輯，支援年度欄位格式 & 通用月份格式）──
+  // ── 格式 B / C：單一工作表 ──
+  // 週上傳：sold_at = 使用者指定的業績日期（fallbackDate，精確到日）
+  // 年度欄位格式：sold_at = monthEnd(從欄位名稱解析出的 YYYY-MM)
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false }) as unknown[][];
   const headerIndex = rows.findIndex((r) => r.some((c) =>
     ['商品', '商品名稱', '品名', '型號', '商品型號'].includes(String(c).trim())
   ));
-  if (headerIndex < 0) return [];
+  if (headerIndex < 0) return { salesRows: [], channelRows: [], storeRows: [], productStoreRows: [], skipped: rows.length };
   const headers = rows[headerIndex].map(String);
   const skuCol  = headers.findIndex((h) => ['型號', 'SKU', 'sku', '品號', '商品型號'].includes(h.trim()));
   const nameCol = headers.findIndex((h) => ['品名', '商品名稱', '商品', '品名規格'].includes(h.trim()));
+
+  // 年度欄位格式（含 'YY-MM銷額' 欄）
   const annualCols = headers.map((h, i) => ({ i, m: String(h).replace(/\s+/g, '').match(/'?(\d{2})-(\d{2})銷額/) })).filter((x) => x.m);
   if (annualCols.length) {
-    return rows.slice(headerIndex + 1).flatMap((r) => annualCols.flatMap(({ i, m }: any) => {
+    let skipped = 0;
+    const salesRows = rows.slice(headerIndex + 1).flatMap((r) => annualCols.flatMap(({ i, m }: any) => {
       const revenue = parseNumber(r[i]);
-      if (!revenue) return [];
+      if (!revenue) { skipped++; return []; }
       const sku  = skuCol  >= 0 ? String(r[skuCol]  ?? '') : '';
       const name = `${sku} ${nameCol >= 0 ? String(r[nameCol] ?? '') : ''}`.trim();
       const month = `20${m[1]}-${m[2]}`;
       return [{ product_id: null, external_sku: sku, external_product_name: name, sold_at: monthEnd(month), quantity: 0, revenue, channel: null, notes: '年度業績明細匯入' }];
     }));
+    return { salesRows, channelRows: [], storeRows: [], productStoreRows: [], skipped };
   }
+
+  // 通用格式（單週/單月）：sold_at = fallbackDate（使用者指定的業績日期）
   const revCol = headers.findIndex((h) => ['業績金額', '實售總金額', '銷售金額', '營業額', '實售金額'].includes(h.trim()));
   const qtyCol = headers.findIndex((h) => ['銷售數量', '銷售總數量', '數量'].includes(h.trim()));
-  return rows.slice(headerIndex + 1).flatMap((r) => {
+  let skipped = 0;
+  const salesRows = rows.slice(headerIndex + 1).flatMap((r) => {
     const name = nameCol >= 0 ? String(r[nameCol] ?? '') : '';
     const sku  = skuCol  >= 0 ? String(r[skuCol]  ?? '') : name.split(/\s+/)[0];
     const revenue  = revCol >= 0 ? parseNumber(r[revCol]) : 0;
     const quantity = qtyCol >= 0 ? parseNumber(r[qtyCol]) : 0;
-    if ((!name && !sku) || (!revenue && !quantity)) return [];
-    return [{ product_id: null, external_sku: sku, external_product_name: name, sold_at: monthEnd(fallbackMonth), quantity, revenue, channel: null, notes: null }];
+    if ((!name && !sku) || (!revenue && !quantity)) { skipped++; return []; }
+    return [{ product_id: null, external_sku: sku, external_product_name: name,
+      sold_at: fallbackDate, quantity, revenue, channel: null, notes: null }];
   });
+  return { salesRows, channelRows: [], storeRows: [], productStoreRows: [], skipped };
 }
