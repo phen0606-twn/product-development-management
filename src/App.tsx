@@ -4282,30 +4282,56 @@ function periodEndDate(text: string) {
 }
 
 function parseSales(workbook: any, utils: any, fallbackMonth: string) {
+  // ── 格式 A：多工作表每月明細（每個 sheet 以「N月」命名，如 5月、12月）──
+  // 欄位固定：商品型號 | 品名規格 | 數量 | 應售金額 | 實售金額 | ...
+  // 年份從 fallbackMonth 取得（例如 importMonth = '2025-05' → year = '2025'）
+  const monthSheetNames = workbook.SheetNames.filter((n: string) => /^\d{1,2}月$/.test(n.trim()));
+  if (monthSheetNames.length > 1) {
+    const year = fallbackMonth.slice(0, 4);
+    return monthSheetNames.flatMap((sheetName: string) => {
+      const monthNum = parseInt(sheetName.trim());
+      const ym = `${year}-${String(monthNum).padStart(2, '0')}`;
+      const soldAt = monthEnd(ym);
+      const rawRows = utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false }) as unknown[][];
+      return rawRows.slice(1).flatMap((r: unknown[]) => {
+        const sku  = String((r as any)[0] ?? '').trim();
+        const name = String((r as any)[1] ?? '').trim();
+        const qty  = parseNumber((r as any)[2]);
+        const rev  = parseNumber((r as any)[4]); // 實售金額
+        if ((!sku && !name) || (!rev && !qty)) return [];
+        return [{ product_id: null, external_sku: sku, external_product_name: name,
+          sold_at: soldAt, quantity: qty, revenue: rev, channel: null, notes: null }];
+      });
+    });
+  }
+
+  // ── 格式 B / C：單一工作表（原有邏輯，支援年度欄位格式 & 通用月份格式）──
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false }) as unknown[][];
-  const headerIndex = rows.findIndex((r) => r.some((c) => ['商品', '商品名稱', '品名', '型號'].includes(String(c).trim())));
+  const headerIndex = rows.findIndex((r) => r.some((c) =>
+    ['商品', '商品名稱', '品名', '型號', '商品型號'].includes(String(c).trim())
+  ));
   if (headerIndex < 0) return [];
   const headers = rows[headerIndex].map(String);
-  const skuCol = headers.findIndex((h) => ['型號', 'SKU', 'sku', '品號'].includes(h.trim()));
-  const nameCol = headers.findIndex((h) => ['品名', '商品名稱', '商品'].includes(h.trim()));
+  const skuCol  = headers.findIndex((h) => ['型號', 'SKU', 'sku', '品號', '商品型號'].includes(h.trim()));
+  const nameCol = headers.findIndex((h) => ['品名', '商品名稱', '商品', '品名規格'].includes(h.trim()));
   const annualCols = headers.map((h, i) => ({ i, m: String(h).replace(/\s+/g, '').match(/'?(\d{2})-(\d{2})銷額/) })).filter((x) => x.m);
   if (annualCols.length) {
     return rows.slice(headerIndex + 1).flatMap((r) => annualCols.flatMap(({ i, m }: any) => {
       const revenue = parseNumber(r[i]);
       if (!revenue) return [];
-      const sku = skuCol >= 0 ? String(r[skuCol] ?? '') : '';
+      const sku  = skuCol  >= 0 ? String(r[skuCol]  ?? '') : '';
       const name = `${sku} ${nameCol >= 0 ? String(r[nameCol] ?? '') : ''}`.trim();
       const month = `20${m[1]}-${m[2]}`;
       return [{ product_id: null, external_sku: sku, external_product_name: name, sold_at: monthEnd(month), quantity: 0, revenue, channel: null, notes: '年度業績明細匯入' }];
     }));
   }
-  const revCol = headers.findIndex((h) => ['業績金額', '實售總金額', '銷售金額', '營業額'].includes(h.trim()));
+  const revCol = headers.findIndex((h) => ['業績金額', '實售總金額', '銷售金額', '營業額', '實售金額'].includes(h.trim()));
   const qtyCol = headers.findIndex((h) => ['銷售數量', '銷售總數量', '數量'].includes(h.trim()));
   return rows.slice(headerIndex + 1).flatMap((r) => {
     const name = nameCol >= 0 ? String(r[nameCol] ?? '') : '';
-    const sku = skuCol >= 0 ? String(r[skuCol] ?? '') : name.split(/\s+/)[0];
-    const revenue = revCol >= 0 ? parseNumber(r[revCol]) : 0;
+    const sku  = skuCol  >= 0 ? String(r[skuCol]  ?? '') : name.split(/\s+/)[0];
+    const revenue  = revCol >= 0 ? parseNumber(r[revCol]) : 0;
     const quantity = qtyCol >= 0 ? parseNumber(r[qtyCol]) : 0;
     if ((!name && !sku) || (!revenue && !quantity)) return [];
     return [{ product_id: null, external_sku: sku, external_product_name: name, sold_at: monthEnd(fallbackMonth), quantity, revenue, channel: null, notes: null }];
