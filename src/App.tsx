@@ -3524,14 +3524,16 @@ function ImportPage() {
     const excelAmt  = invExcelTotal?.amount ?? parsedAmt;
 
     // ── 步驟 1：刪除同日所有舊紀錄（不限 SKU，確保完整替換）──
+    // 使用日期範圍 [date, nextDay) 以同時清除精確日期字串和 timestamp 格式的舊紀錄
+    const nextDay = new Date(new Date(recordDate).getTime() + 86400000).toISOString().slice(0, 10);
     setInvMsg('⏳ 步驟 1/4：清除舊資料...');
     const { error: delErr } = await supabase
-      .from('inventory_records').delete().eq('recorded_at', recordDate);
+      .from('inventory_records').delete().gte('recorded_at', recordDate).lt('recorded_at', nextDay);
     if (delErr) { setInvMsg(`❌ 刪除失敗：${delErr.message}`); setInvImporting(false); return; }
 
-    // ── 步驟 2：驗證刪除是否徹底 ──
+    // ── 步驟 2：驗證刪除是否徹底（同樣使用日期範圍）──
     const { count: afterDelCount } = await supabase
-      .from('inventory_records').select('id', { count: 'exact', head: true }).eq('recorded_at', recordDate);
+      .from('inventory_records').select('id', { count: 'exact', head: true }).gte('recorded_at', recordDate).lt('recorded_at', nextDay);
     const deleteVerified = (afterDelCount ?? 0) === 0;
     if (!deleteVerified) {
       setInvMsg(`⚠ 刪除後仍殘留 ${afterDelCount} 筆（RLS 權限問題），匯入已中止。`);
@@ -3577,7 +3579,7 @@ function ImportPage() {
       while (true) {
         const { data: page } = await supabase
           .from('inventory_records').select('external_sku, quantity')
-          .eq('recorded_at', recordDate).range(from, from + PAGE - 1);
+          .gte('recorded_at', recordDate).lt('recorded_at', nextDay).range(from, from + PAGE - 1);
         if (!page || page.length === 0) break;
         allDbRows.push(...page);
         if (page.length < PAGE) break;
