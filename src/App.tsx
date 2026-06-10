@@ -2004,10 +2004,14 @@ function SalesPage() {
       const prevDate = i > 0 ? recent[i - 1] : null;
       const prevRows = prevDate ? sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === prevDate) : [];
       const prevRev  = prevRows.length ? sum(prevRows, 'revenue') : null;
-      const d  = new Date(date + 'T00:00:00');   // sold_at = 週開始
-      const ed = new Date(d); ed.setDate(ed.getDate() + 6);  // 週結束
+      const d = new Date(date + 'T00:00:00');
       const fmt = (x: Date) => `${x.getMonth() + 1}/${x.getDate()}`;
-      const weekRange = `${fmt(d)}-${fmt(ed)}`;
+      // 週結束 = 下一個 sold_at 前一天；最後一期 = 當月最後一天
+      const nextDateStr = allDates[allDates.indexOf(date) + 1];
+      const ed = nextDateStr
+        ? (() => { const t = new Date(nextDateStr + 'T00:00:00'); t.setDate(t.getDate() - 1); return t; })()
+        : new Date(d.getFullYear(), d.getMonth() + 1, 0);
+      const weekRange = ed > d ? `${fmt(d)}-${fmt(ed)}` : fmt(d);
       return { date, label: weekRange, weekRange,
                revenue: rev, qty: q, avgPrice: avg, prevRevenue: prevRev };
     });
