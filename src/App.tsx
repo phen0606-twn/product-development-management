@@ -81,6 +81,14 @@ function categoryLabel(value: string | null | undefined): string {
   return CATEGORY_LABEL[value] ?? CATEGORY_LABEL[value.toLowerCase()] ?? value;
 }
 
+// ── 商品狀態排序 & 分類 ──────────────────────────────────────────────────────
+const ACTIVE_STATUS_SET = new Set(['in_development', 'quoting', 'mass_production', 'planning', 'delayed']);
+const STATUS_SORT_ORDER: Record<string, number> = {
+  in_development: 0, quoting: 1, mass_production: 2,
+  planning: 3, delayed: 4,
+  completed: 5, launched: 6, cancelled: 7,
+};
+
 export default function App() {
   const [ready, setReady] = useState(!hasSupabaseConfig);
   const [email, setEmail] = useState<string | null>(null);
@@ -480,11 +488,33 @@ function ProductsPage() {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [filterVendor, setFilterVendor] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'completed'>('all');
+  const [showCompleted, setShowCompleted] = useState(false);
 
-  const filteredProducts = useMemo(() =>
-    filterVendor ? products.rows.filter((p) => p.vendor_id === filterVendor) : products.rows,
-    [products.rows, filterVendor],
-  );
+  // 各商品的最新進度日期（用於同狀態內排序：由新到舊）
+  const latestDateByProduct = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of products.rows) {
+      const rows = mergeProgressRows(p.id, progress.rows, events.rows);
+      const latest = rows.slice().sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)))[0];
+      map.set(p.id, String(latest?.started_at || latest?.created_at || ''));
+    }
+    return map;
+  }, [products.rows, progress.rows, events.rows]);
+
+  // 依狀態順序 + 最新進度日期排序（含廠商篩選）
+  const sortedProducts = useMemo(() => {
+    const base = filterVendor ? products.rows.filter((p) => p.vendor_id === filterVendor) : products.rows;
+    return [...base].sort((a, b) => {
+      const oa = STATUS_SORT_ORDER[a.status] ?? 9;
+      const ob = STATUS_SORT_ORDER[b.status] ?? 9;
+      if (oa !== ob) return oa - ob;
+      return (latestDateByProduct.get(b.id) ?? '').localeCompare(latestDateByProduct.get(a.id) ?? '');
+    });
+  }, [products.rows, filterVendor, latestDateByProduct]);
+
+  const activeProducts = useMemo(() => sortedProducts.filter((p) => ACTIVE_STATUS_SET.has(p.status)), [sortedProducts]);
+  const completedProducts = useMemo(() => sortedProducts.filter((p) => !ACTIVE_STATUS_SET.has(p.status)), [sortedProducts]);
 
   // 完整單位成本 = (直接費用 + 歸入配件費用) ÷ 總訂購數量
   // 與商品詳情頁邏輯保持完全一致：
@@ -563,9 +593,29 @@ function ProductsPage() {
     }
   }
 
+  const today = new Date().toISOString().slice(0, 10);
+  const isOverdue = (row: Row) =>
+    ACTIVE_STATUS_SET.has(row.status) && !!row.target_launch_date && String(row.target_launch_date) < today;
+
+  // 「全部」模式下才顯示收合按鈕；篩選「已完成」時直接全展開
+  const showToggle = filterStatus === 'all' && completedProducts.length > 0;
+  const displayActive = filterStatus !== 'completed' ? activeProducts : [];
+  const displayCompleted = filterStatus !== 'active' ? completedProducts : [];
+
   return (
     <Page title="商品管理" subtitle="建立商品、編輯商品、查看詳情與進度">
       <div className="flex flex-wrap items-end gap-3">
+        {/* 快速篩選按鈕 */}
+        <div className="flex overflow-hidden rounded-md border border-slate-200">
+          {(['all', 'active', 'completed'] as const).map((f) => (
+            <button key={f} type="button" onClick={() => setFilterStatus(f)}
+              className={`px-3 py-2 text-sm font-medium transition-colors ${
+                filterStatus === f ? 'bg-[#984696] text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+              }`}>
+              {f === 'all' ? '全部' : f === 'active' ? '進行中' : '已完成'}
+            </button>
+          ))}
+        </div>
         <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增商品" />
         <label className="text-sm">
           <span className="mb-1 block text-slate-500">篩選廠商</span>
@@ -574,29 +624,83 @@ function ProductsPage() {
             {vendors.rows.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
           </select>
         </label>
-        {filterVendor && <p className="self-end pb-2 text-sm text-slate-500">共 {filteredProducts.length} 件商品</p>}
+        {filterVendor && <p className="self-end pb-2 text-sm text-slate-500">共 {sortedProducts.length} 件商品</p>}
       </div>
       {message && <Notice tone="error">{message}</Notice>}
       {products.error && <Notice tone="error">商品資料讀取失敗：{products.error}</Notice>}
       {(progress.error || events.error) && <Notice tone="error">進度資料讀取失敗：{progress.error || events.error}</Notice>}
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
       <Table columns={['SKU', '商品名稱', '分類', '狀態', '單位成本', '最近進度', '廠商', '操作']}>
-        {products.loading ? <LoadingRow /> : filteredProducts.map((row) => {
-          const uc = unitCostByProduct.get(row.id);
-          return (
-            <tr key={row.id} className="border-t align-top">
-              <td className="p-3">{row.sku}</td>
-              <td className="p-3"><Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link><p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p></td>
-              <td className="p-3">{categoryLabel(row.category)}</td>
-              <td className="p-3">{statusText(row.status)}</td>
-              <td className="p-3 tabular-nums">{costs.loading || batches.loading ? <span className="text-slate-300 text-xs">…</span> : uc ? <span className="font-medium text-sun">{formatCurrency(uc)}</span> : <span className="text-slate-300">—</span>}</td>
-              <td className="p-3"><LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} /></td>
-              <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
-              <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
+        {products.loading ? <LoadingRow /> : <>
+          {/* ── 進行中商品 ── */}
+          {displayActive.map((row) => {
+            const uc = unitCostByProduct.get(row.id);
+            const overdue = isOverdue(row);
+            return (
+              <tr key={row.id} className="border-t align-top bg-white">
+                <td className={`p-3${overdue ? ' border-l-4 border-orange-400 pl-2' : ''}`}>{row.sku}</td>
+                <td className="p-3">
+                  <Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link>
+                  <p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p>
+                </td>
+                <td className="p-3">{categoryLabel(row.category)}</td>
+                <td className="p-3">
+                  <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium bg-[#572A87] text-white">
+                    {statusText(row.status)}
+                  </span>
+                </td>
+                <td className="p-3 tabular-nums">{costs.loading || batches.loading ? <span className="text-slate-300 text-xs">…</span> : uc ? <span className="font-medium text-sun">{formatCurrency(uc)}</span> : <span className="text-slate-300">—</span>}</td>
+                <td className="p-3">
+                  <LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} />
+                  {overdue && <p className="mt-1 text-xs font-medium text-red-500">⚠️ 已逾期</p>}
+                </td>
+                <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
+                <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
+              </tr>
+            );
+          })}
+          {/* ── 分隔線（全部模式展開時顯示） ── */}
+          {showToggle && showCompleted && activeProducts.length > 0 && completedProducts.length > 0 && (
+            <tr className="border-t">
+              <td colSpan={8} className="px-3 py-2 text-center text-xs text-slate-400 select-none">
+                ── 以下為已完成商品 ──
+              </td>
             </tr>
-          );
-        })}
+          )}
+          {/* ── 已完成商品 ── */}
+          {(filterStatus === 'completed' || (showToggle && showCompleted)) && displayCompleted.map((row) => {
+            const uc = unitCostByProduct.get(row.id);
+            return (
+              <tr key={row.id} className="border-t align-top" style={{ backgroundColor: '#F5F5F5' }}>
+                <td className="p-3" style={{ color: '#999999' }}>{row.sku}</td>
+                <td className="p-3">
+                  <Link to={`/products/${row.id}`} className="font-medium hover:underline" style={{ color: '#999999' }}>{row.name}</Link>
+                  <p className="mt-1 text-xs" style={{ color: '#BBBBBB' }}>{[row.color, row.size].filter(Boolean).join(' / ')}</p>
+                </td>
+                <td className="p-3" style={{ color: '#999999' }}>{categoryLabel(row.category)}</td>
+                <td className="p-3">
+                  <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: '#E5E5E5', color: '#999999' }}>
+                    {statusText(row.status)}
+                  </span>
+                </td>
+                <td className="p-3 tabular-nums" style={{ color: '#999999' }}>{costs.loading || batches.loading ? <span className="text-xs" style={{ color: '#CCCCCC' }}>…</span> : uc ? formatCurrency(uc) : '—'}</td>
+                <td className="p-3">
+                  <LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} dim />
+                </td>
+                <td className="p-3" style={{ color: '#999999' }}>{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
+                <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
+              </tr>
+            );
+          })}
+        </>}
       </Table>
+      {/* 已完成商品展開 / 收合按鈕 */}
+      {showToggle && (
+        <button type="button" onClick={() => setShowCompleted((v) => !v)}
+          className="mt-3 w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-50">
+          {showCompleted ? '收起已完成商品 ▲' : `顯示已完成商品（${completedProducts.length} 件）▼`}
+        </button>
+      )}
     </Page>
   );
 }
@@ -4053,14 +4157,14 @@ function Info({ label, value }: { label: string; value: string }) {
   return <div><p className="text-sm text-slate-500">{label}</p><p className="mt-1 whitespace-pre-wrap text-sm font-medium text-ink">{value}</p></div>;
 }
 
-function LatestProgress({ product, progress }: { product: Row; progress: Row[] }) {
-  const latest = progress.sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)))[0];
-  if (!latest) return <span className="text-slate-400">{product.current_stage || '尚無進度'}</span>;
+function LatestProgress({ product, progress, dim = false }: { product: Row; progress: Row[]; dim?: boolean }) {
+  const latest = progress.slice().sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)))[0];
+  if (!latest) return <span style={dim ? { color: '#BBBBBB' } : undefined} className={dim ? '' : 'text-slate-400'}>{product.current_stage || '尚無進度'}</span>;
   return (
     <div className="max-w-sm">
-      <p className="font-medium text-slate-700">{latest.stage}</p>
-      <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs text-slate-500">{latest.content || latest.title}</p>
-      <p className="mt-1 text-xs text-slate-400">{latest.started_at || latest.created_at?.slice(0, 10)}</p>
+      <p className={dim ? 'font-medium' : 'font-medium text-slate-700'} style={dim ? { color: '#BBBBBB' } : undefined}>{latest.stage}</p>
+      <p className={`mt-1 line-clamp-2 whitespace-pre-wrap text-xs${dim ? '' : ' text-slate-500'}`} style={dim ? { color: '#CCCCCC' } : undefined}>{latest.content || latest.title}</p>
+      <p className={`mt-1 text-xs${dim ? '' : ' text-slate-400'}`} style={dim ? { color: '#DDDDDD' } : undefined}>{latest.started_at || latest.created_at?.slice(0, 10)}</p>
     </div>
   );
 }
