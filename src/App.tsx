@@ -2006,12 +2006,14 @@ function SalesPage() {
       const prevRev  = prevRows.length ? sum(prevRows, 'revenue') : null;
       const d = new Date(date + 'T00:00:00');
       const fmt = (x: Date) => `${x.getMonth() + 1}/${x.getDate()}`;
-      // 週結束 = 下一個 sold_at 前一天；最後一期 = 當月最後一天
+      // 優先使用資料庫存的 week_label（由匯入時從檔名解析）
+      const storedLabel = rows.find((r) => r.week_label)?.week_label as string | undefined;
+      // Fallback：下一個 sold_at 前一天；最後一期 = 當月最後一天
       const nextDateStr = allDates[allDates.indexOf(date) + 1];
       const ed = nextDateStr
         ? (() => { const t = new Date(nextDateStr + 'T00:00:00'); t.setDate(t.getDate() - 1); return t; })()
         : new Date(d.getFullYear(), d.getMonth() + 1, 0);
-      const weekRange = ed > d ? `${fmt(d)}-${fmt(ed)}` : fmt(d);
+      const weekRange = storedLabel || (ed > d ? `${fmt(d)}-${fmt(ed)}` : fmt(d));
       return { date, label: weekRange, weekRange,
                revenue: rev, qty: q, avgPrice: avg, prevRevenue: prevRev };
     });
@@ -3860,6 +3862,7 @@ function ImportPage() {
     let date = String(form.get('date'));
     const weekMatch = (file as File).name.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
     let detectedWeekEnd = '';
+    let weekLabel = '';
     if (weekMatch) {
       const [, year, startMonth, startDay, , endDay] = weekMatch;
       const weekStart = `${year}-${startMonth}-${startDay}`;
@@ -3868,13 +3871,16 @@ function ImportPage() {
         : startMonth;
       detectedWeekEnd = `${year}-${endMonthNum}-${endDay}`;
       date = weekStart;
+      // 從日期字串去掉前置零，例：2026-05-01 → "5/1"、2026-05-10 → "5/10"
+      const fmtL = (ds: string) => { const m = ds.match(/-(\d+)-(\d+)$/); return m ? `${+m[1]}/${+m[2]}` : ds; };
+      weekLabel = `${fmtL(date)}-${fmtL(detectedWeekEnd)}`;
     }
     setImportDate(date);
     setImportWeekEnd(detectedWeekEnd);
 
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-    const parsed = parseSalesImport(workbook, XLSX.utils, date);
+    const parsed = parseSalesImport(workbook, XLSX.utils, date, weekLabel);
     setSalesRows(parsed.salesRows); setChannelRows(parsed.channelRows);
     setStoreRows(parsed.storeRows); setProductStoreRows(parsed.productStoreRows);
     setSalesSkipped(parsed.skipped);
@@ -4619,7 +4625,7 @@ function isWeeklySkipSheet(name: string) {
   return WEEKLY_SKIP_SHEETS.has(name.trim()) || /各倉|附加/.test(name);
 }
 
-function parseWeeklySales(workbook: any, utils: any, weekStart: string) {
+function parseWeeklySales(workbook: any, utils: any, weekStart: string, weekLabel = '') {
   let skipped = 0;
   const salesRows: Row[] = [];
   for (const sheetName of workbook.SheetNames as string[]) {
@@ -4646,16 +4652,17 @@ function parseWeeklySales(workbook: any, utils: any, weekStart: string) {
         revenue,
         channel: classifyStore(fullStore || storeCode),
         notes: fullStore || storeCode,
+        week_label: weekLabel || null,
       });
     }
   }
   return { salesRows, channelRows: [], storeRows: [], productStoreRows: [], skipped };
 }
 
-function parseSalesImport(workbook: any, utils: any, fallbackDate: string) {
+function parseSalesImport(workbook: any, utils: any, fallbackDate: string, weekLabel = '') {
   // ── 格式 D：新事業銷售統計週報（偵測「新事業銷售總覽」sheet）──
   if ((workbook.SheetNames as string[]).includes('新事業銷售總覽')) {
-    return parseWeeklySales(workbook, utils, fallbackDate);
+    return parseWeeklySales(workbook, utils, fallbackDate, weekLabel);
   }
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false }) as unknown[][];
