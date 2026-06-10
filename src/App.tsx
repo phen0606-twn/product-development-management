@@ -45,7 +45,6 @@ const statusOptions = [
   ['delayed', '延遲'],
   ['launched', '已上架'],
   ['completed', '完成'],
-  ['cancelled', '取消'],
 ] as const;
 
 const stageOptions = ['提案', '報價中', '打樣', '修改', '確認樣', '下單', '大貨中', '生產', '驗貨', '出貨', '上架', '完成'];
@@ -86,7 +85,7 @@ const ACTIVE_STATUS_SET = new Set(['in_development', 'quoting', 'mass_production
 const STATUS_SORT_ORDER: Record<string, number> = {
   in_development: 0, quoting: 1, mass_production: 2,
   planning: 3, delayed: 4,
-  completed: 5, launched: 6, cancelled: 7,
+  completed: 5, launched: 6,
 };
 
 export default function App() {
