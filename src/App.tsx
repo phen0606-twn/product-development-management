@@ -327,6 +327,8 @@ function Dashboard() {
   const costs = useRows('development_costs');
   const sales = useRows('sales_records');
   const inventory = useRows('inventory_records', 'recorded_at');
+  const progress = useRows('development_progress');
+  const events = useRows('development_events');
   const month = new Date().toISOString().slice(0, 7);
   const active = products.rows.filter((p) => ['planning', 'quoting', 'in_development', 'mass_production'].includes(p.status)).length;
   const delayed = products.rows.filter((p) => p.status === 'delayed').length;
@@ -418,6 +420,50 @@ function Dashboard() {
     .filter((p) => p.estimated_arrival_date && p.estimated_arrival_date >= today && p.estimated_arrival_date <= in60days)
     .sort((a, b) => String(a.estimated_arrival_date).localeCompare(String(b.estimated_arrival_date)));
 
+  const in14days = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+
+  // 今日更新
+  const todayUpdates = useMemo(() => {
+    const results: Array<{ product: Row; summary: string }> = [];
+    for (const p of products.rows) {
+      const rows = mergeProgressRows(p.id, progress.rows, events.rows);
+      const todayRows = rows.filter((r) => String(r.started_at || r.created_at || '').slice(0, 10) === today);
+      if (todayRows.length > 0) {
+        const r = todayRows[0];
+        results.push({ product: p, summary: [r.stage, r.content || r.title].filter(Boolean).join('　') });
+      }
+    }
+    return results;
+  }, [products.rows, progress.rows, events.rows, today]);
+
+  // 超過 7 天未更新的進行中商品
+  const WATCH_STATUSES = new Set(['in_development', 'quoting', 'mass_production']);
+  const staleActive = useMemo(() => {
+    return products.rows
+      .filter((p) => WATCH_STATUSES.has(p.status))
+      .map((p) => {
+        const rows = mergeProgressRows(p.id, progress.rows, events.rows);
+        const latest = rows.slice().sort((a, b) =>
+          String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at))
+        )[0];
+        const latestDate = String(latest?.started_at || latest?.created_at || '').slice(0, 10);
+        const diffDays = latestDate
+          ? Math.floor((new Date(today + 'T00:00:00').getTime() - new Date(latestDate + 'T00:00:00').getTime()) / 86400000)
+          : 9999;
+        return { product: p, latestDate, diffDays };
+      })
+      .filter((x) => x.diffDays >= 7)
+      .sort((a, b) => b.diffDays - a.diffDays);
+  }, [products.rows, progress.rows, events.rows, today]);
+
+  // 即將到期（14 天內）
+  const upcomingLaunch = useMemo(() =>
+    products.rows
+      .filter((p) => p.target_launch_date && p.target_launch_date >= today && p.target_launch_date <= in14days)
+      .sort((a, b) => String(a.target_launch_date).localeCompare(String(b.target_launch_date))),
+    [products.rows, today, in14days]
+  );
+
   return (
     <Page title="Dashboard" subtitle="開發商品、費用與業績總覽">
       <div className="grid gap-4 md:grid-cols-4">
@@ -470,6 +516,63 @@ function Dashboard() {
                 </div>
               );
             })}
+          </div>
+        </section>
+      )}
+      {(todayUpdates.length > 0 || staleActive.length > 0 || upcomingLaunch.length > 0) && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <h3 className="mb-4 font-semibold text-ink">待追蹤提醒</h3>
+          <div className="space-y-5">
+            {/* 今日更新 */}
+            {todayUpdates.length > 0 && (
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-500">今日更新（{todayUpdates.length} 件）</p>
+                <div className="space-y-1.5">
+                  {todayUpdates.map(({ product, summary }) => (
+                    <div key={product.id} className="flex items-start gap-2 rounded-md bg-green-50 px-3 py-2 text-sm">
+                      <Link to={`/products/${product.id}`} className="shrink-0 font-medium text-leaf hover:underline">{product.name}</Link>
+                      {summary && <span className="text-slate-500">／{summary}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* 超過 7 天未更新 */}
+            {staleActive.length > 0 && (
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-500">超過 7 天未更新（{staleActive.length} 件）</p>
+                <div className="space-y-1.5">
+                  {staleActive.map(({ product, diffDays }) => (
+                    <div key={product.id} className="flex items-center justify-between rounded-md bg-amber-50 px-3 py-2 text-sm">
+                      <Link to={`/products/${product.id}`} className="font-medium text-leaf hover:underline">
+                        ⚠️ {product.name}
+                      </Link>
+                      <span className="text-xs font-medium text-amber-700">已 {diffDays === 9999 ? '—' : diffDays} 天未更新</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* 即將到期 */}
+            {upcomingLaunch.length > 0 && (
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-500">即將上架（14 天內，{upcomingLaunch.length} 件）</p>
+                <div className="space-y-1.5">
+                  {upcomingLaunch.map((p) => {
+                    const cd = launchCountdown(p.target_launch_date);
+                    return (
+                      <div key={p.id} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-sm">
+                        <Link to={`/products/${p.id}`} className="font-medium text-leaf hover:underline">{p.name}</Link>
+                        <span className="flex items-center gap-2 text-xs">
+                          <span className="text-slate-400">{p.target_launch_date}</span>
+                          {cd && <span className={`font-medium ${cd.colorClass}`}>{cd.text}</span>}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -634,7 +737,7 @@ function ProductsPage() {
       {products.error && <Notice tone="error">商品資料讀取失敗：{products.error}</Notice>}
       {(progress.error || events.error) && <Notice tone="error">進度資料讀取失敗：{progress.error || events.error}</Notice>}
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
-      <Table columns={['SKU', '商品名稱', '分類', '狀態', '成本', '最近進度', '廠商', '操作']}>
+      <Table columns={['SKU', '商品名稱', '分類', '狀態', '成本', '最近進度', '建立日期', '廠商', '操作']}>
         {products.loading ? <LoadingRow /> : <>
           {/* ── 進行中商品 ── */}
           {displayActive.map((row) => {
@@ -646,6 +749,15 @@ function ProductsPage() {
                 <td className="p-3">
                   <Link to={`/products/${row.id}`} className="font-medium text-leaf hover:underline">{row.name}</Link>
                   <p className="mt-1 text-xs text-slate-500">{[row.color, row.size].filter(Boolean).join(' / ')}</p>
+                  {row.target_launch_date && (() => {
+                    const cd = launchCountdown(row.target_launch_date);
+                    return (
+                      <p className="mt-1 text-xs">
+                        <span className="text-slate-400">上架 {row.target_launch_date}</span>
+                        {cd && <span className={`ml-1 font-medium ${cd.colorClass}`}>（{cd.text}）</span>}
+                      </p>
+                    );
+                  })()}
                 </td>
                 <td className="p-3">{categoryLabel(row.category)}</td>
                 <td className="p-3">
@@ -658,6 +770,7 @@ function ProductsPage() {
                   <LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} />
                   {overdue && <p className="mt-1 text-xs font-medium text-red-500">⚠️ 已逾期</p>}
                 </td>
+                <td className="p-3 text-xs text-slate-500">{String(row.created_at || '').slice(0, 10) || '—'}</td>
                 <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
                 <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
               </tr>
@@ -666,7 +779,7 @@ function ProductsPage() {
           {/* ── 分隔線（全部模式展開時顯示） ── */}
           {showToggle && showCompleted && activeProducts.length > 0 && completedProducts.length > 0 && (
             <tr className="border-t">
-              <td colSpan={8} className="px-3 py-2 text-center text-xs text-slate-400 select-none">
+              <td colSpan={9} className="px-3 py-2 text-center text-xs text-slate-400 select-none">
                 ── 以下為已完成商品 ──
               </td>
             </tr>
@@ -680,6 +793,15 @@ function ProductsPage() {
                 <td className="p-3">
                   <Link to={`/products/${row.id}`} className="font-medium hover:underline" style={{ color: '#999999' }}>{row.name}</Link>
                   <p className="mt-1 text-xs" style={{ color: '#BBBBBB' }}>{[row.color, row.size].filter(Boolean).join(' / ')}</p>
+                  {row.target_launch_date && (() => {
+                    const cd = launchCountdown(row.target_launch_date);
+                    return (
+                      <p className="mt-1 text-xs">
+                        <span className="text-slate-400">上架 {row.target_launch_date}</span>
+                        {cd && <span className={`ml-1 font-medium ${cd.colorClass}`}>（{cd.text}）</span>}
+                      </p>
+                    );
+                  })()}
                 </td>
                 <td className="p-3" style={{ color: '#999999' }}>{categoryLabel(row.category)}</td>
                 <td className="p-3">
@@ -691,6 +813,7 @@ function ProductsPage() {
                 <td className="p-3">
                   <LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} dim />
                 </td>
+                <td className="p-3 text-xs" style={{ color: '#999999' }}>{String(row.created_at || '').slice(0, 10) || '—'}</td>
                 <td className="p-3" style={{ color: '#999999' }}>{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
                 <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
               </tr>
@@ -883,7 +1006,15 @@ function ProductDetailPage() {
             <Info label="廠商" value={vendors.rows.find((v) => v.id === product.vendor_id)?.name || '-'} />
             <Info label="顏色" value={product.color || '-'} />
             <Info label="尺寸" value={product.size || '-'} />
-            <Info label="預計上架" value={product.target_launch_date || '-'} />
+            <div>
+              <p className="text-sm text-slate-500">預計上架</p>
+              <p className="mt-1 text-sm font-medium text-ink">{product.target_launch_date || '-'}</p>
+              {(() => {
+                const cd = launchCountdown(product.target_launch_date);
+                if (!cd) return null;
+                return <p className={`mt-0.5 text-xs font-medium ${cd.colorClass}`}>{cd.text}</p>;
+              })()}
+            </div>
           </div>
           <div className="mt-5">
             <p className="text-sm text-slate-500">規格摘要</p>
@@ -1216,6 +1347,27 @@ function ProductDetailPage() {
           </div>
         </div>
       </section>
+      {productProgress.length > 0 && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+          <h3 className="mb-3 font-semibold text-ink">進度日誌</h3>
+          <div className="divide-y divide-slate-100">
+            {productProgress.map((row) => (
+              <div key={`log-${row.id}`} className="flex items-start gap-3 py-2 text-sm">
+                <span className="w-24 shrink-0 font-mono text-xs text-slate-400 pt-0.5">
+                  {row.started_at || String(row.created_at || '').slice(0, 10) || '-'}
+                </span>
+                <span className="shrink-0 text-slate-300">│</span>
+                <span className="text-slate-700">
+                  <span className="font-medium">{row.stage}</span>
+                  {(row.content || row.title) && (
+                    <span className="text-slate-500">，{row.content || row.title}</span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </Page>
   );
 }
@@ -4313,6 +4465,17 @@ function dueDateStatus(dateStr: string | null | undefined): 'overdue' | 'soon' |
   const sevenDaysLater = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   if (dateStr <= sevenDaysLater) return 'soon';
   return 'ok';
+}
+
+function launchCountdown(dateStr: string | null | undefined) {
+  if (!dateStr) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const diff = Math.round(
+    (new Date(dateStr + 'T00:00:00').getTime() - new Date(today + 'T00:00:00').getTime()) / 86400000
+  );
+  if (diff < 0) return { diff, text: `已逾期 ${-diff} 天`, colorClass: 'text-red-500' };
+  if (diff <= 7) return { diff, text: `還有 ${diff} 天`, colorClass: 'text-orange-500' };
+  return { diff, text: `還有 ${diff} 天`, colorClass: 'text-green-600' };
 }
 
 function costTypeLabel(type: string) {
