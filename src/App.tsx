@@ -1669,14 +1669,34 @@ function SalesPage() {
   }, [records, productSearchKw]);
   const productRows = rank(group(records, salesProductLabel)).slice(0, 10);
 
-  // 近 6 個月業績趨勢（折線圖）
-  const trendData = useMemo(() => {
-    const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
-    return allMonths.slice(-6).map((month) => {
-      const rows = sales.rows.filter((r) => String(r.sold_at || '').slice(0, 7) === month);
-      return { month: month.replace('-', '/'), revenue: sum(rows, 'revenue'), qty: sum(rows, 'quantity') };
+  // MOM / YOY 成長率（用於顏色判斷）
+  const momRate = prevMonth ? ((revenue - prevMonth) / Math.abs(prevMonth)) * 100 : revenue ? 100 : 0;
+  const yoyRate = prevYear  ? ((revenue - prevYear)  / Math.abs(prevYear))  * 100 : revenue ? 100 : 0;
+  const rateColor = (r: number) => r >= 0 ? 'text-[#86B926]' : 'text-red-500';
+  const rateArrow = (r: number) => r >= 0 ? '↑' : '↓';
+
+  // 週趨勢資料（每個 sold_at 視為一個「週期」，支援 4/8/12/26 期選擇）
+  const [weekCount, setWeekCount] = useState(8);
+  const weekTrendData = useMemo(() => {
+    const allDates = [...new Set(
+      sales.rows.map((r) => String(r.sold_at || '').slice(0, 10)).filter(Boolean)
+    )].sort();
+    const recent = allDates.slice(-weekCount);
+    return recent.map((date, i) => {
+      const rows = sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === date);
+      const rev = sum(rows, 'revenue');
+      const q   = sum(rows, 'quantity');
+      const avg = q > 0 ? Math.round(rev / q) : 0;
+      const prevDate = i > 0 ? recent[i - 1] : null;
+      const prevRows = prevDate ? sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === prevDate) : [];
+      const prevRev  = prevRows.length ? sum(prevRows, 'revenue') : null;
+      const d  = new Date(date + 'T00:00:00');
+      const sd = new Date(d); sd.setDate(sd.getDate() - 6);
+      const fmt = (x: Date) => `${x.getMonth() + 1}/${x.getDate()}`;
+      return { date, label: fmt(d), weekRange: `${fmt(sd)}–${fmt(d)}`,
+               revenue: rev, qty: q, avgPrice: avg, prevRevenue: prevRev };
     });
-  }, [sales.rows]);
+  }, [sales.rows, weekCount]);
 
   // 資料一致性驗證（明細表 vs 通路彙總）
   const consistencyCheck = useDataConsistencyCheck(selectedMonth);
@@ -1736,30 +1756,122 @@ function SalesPage() {
           </div>
         )}
       </section>
-      <div className="mb-6 space-y-3">
-        <div className="grid gap-3 md:grid-cols-3"><Card label="區間業績" value={formatCurrency(revenue)} compact /><Card label="區間銷售數量" value={qty.toLocaleString('zh-TW')} compact /><Card label="平均單價" value={formatCurrency(qty ? revenue / qty : 0)} compact /></div>
-        <div className="grid gap-3 md:grid-cols-5"><Card label="月目標" value={formatCurrency(target)} compact /><Card label="月達成率" value={`${(target ? revenue / target * 100 : 0).toFixed(1)}%`} compact /><Card label="年度目標" value={formatCurrency(annualTarget)} compact /><Card label="年度業績" value={formatCurrency(annualSales)} compact /><Card label="年度進度" value={`${annualTarget ? (annualSales / annualTarget * 100).toFixed(1) : '0.0'}%`} compact /></div>
-        <div className="grid gap-3 md:grid-cols-2"><Card label="MOM" value={growth(revenue, prevMonth)} helper={`前月 ${formatCurrency(prevMonth)}`} compact /><Card label="YOY" value={growth(revenue, prevYear)} helper={`去年同期 ${formatCurrency(prevYear)}`} compact /></div>
+      {/* ── 第一區：核心數字 + MOM/YOY 標籤 ── */}
+      <div className="grid gap-3 md:grid-cols-3">
+        {/* 區間業績（帶 MOM / YOY） */}
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">區間業績</p>
+          <p className="mt-1 text-2xl font-bold text-ink">{formatCurrency(revenue)}</p>
+          {(prevMonth > 0 || prevYear > 0) && (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+              {prevMonth > 0 && (
+                <span>
+                  <span className={`font-semibold ${rateColor(momRate)}`}>{rateArrow(momRate)}{Math.abs(momRate).toFixed(1)}% MOM</span>
+                  <span className="ml-1 text-slate-400">（前月 {formatCurrency(prevMonth)}）</span>
+                </span>
+              )}
+              {prevYear > 0 && (
+                <span>
+                  <span className={`font-semibold ${rateColor(yoyRate)}`}>{rateArrow(yoyRate)}{Math.abs(yoyRate).toFixed(1)}% YOY</span>
+                  <span className="ml-1 text-slate-400">（去年同期 {formatCurrency(prevYear)}）</span>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        {/* 銷售數量 */}
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">銷售數量</p>
+          <p className="mt-1 text-2xl font-bold text-ink">{qty.toLocaleString('zh-TW')} <span className="text-base font-normal text-slate-400">件</span></p>
+        </div>
+        {/* 平均單價 */}
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">平均單價</p>
+          <p className="mt-1 text-2xl font-bold text-ink">{formatCurrency(qty ? Math.round(revenue / qty) : 0)}</p>
+        </div>
       </div>
-      {/* 近 6 個月業績趨勢折線圖（.claude/skills/chart-style 規範） */}
-      {trendData.length >= 2 && (
+
+      {/* ── 第二區：目標進度條 ── */}
+      <div className="grid gap-3 md:grid-cols-2">
+        {[
+          { label: '月目標進度', current: revenue, total: target },
+          { label: '年度目標進度', current: annualSales, total: annualTarget },
+        ].map(({ label, current, total: t }) => {
+          const rawPct = t > 0 ? (current / t) * 100 : 0;
+          const barPct = Math.min(rawPct, 100);
+          const achieved = rawPct >= 100;
+          return (
+            <div key={label} className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-600">{label}</p>
+                <p className={`text-lg font-bold ${achieved ? 'text-[#86B926]' : 'text-[#572A87]'}`}>
+                  {rawPct.toFixed(1)}%
+                </p>
+              </div>
+              <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${barPct}%`, backgroundColor: achieved ? '#86B926' : '#572A87' }}
+                />
+              </div>
+              <div className="mt-1.5 flex justify-between text-xs text-slate-400">
+                <span>{formatCurrency(current)}</span>
+                <span>目標 {formatCurrency(t)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── 第三區：週趨勢折線圖 ── */}
+      {weekTrendData.length >= 2 && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-          <h3 className="mb-4 font-semibold">近 6 個月業績趨勢</h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={trendData} margin={CHART_MARGIN}>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold">週趨勢分析</h3>
+            <div className="flex gap-1">
+              {([4, 8, 12, 26] as const).map((n) => (
+                <button key={n} type="button"
+                  onClick={() => setWeekCount(n)}
+                  className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${weekCount === n ? 'bg-[#572A87] text-white' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                  {n}週
+                </button>
+              ))}
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={weekTrendData} margin={{ top: 4, right: 50, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
-              <XAxis dataKey="month" tick={CHART_TICK_MD} />
-              <YAxis yAxisId="rev" tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={CHART_TICK} width={60} />
-              <YAxis yAxisId="qty" orientation="right" tick={CHART_TICK} width={40} />
+              <XAxis dataKey="label" tick={CHART_TICK_MD} />
+              <YAxis yAxisId="rev" tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={CHART_TICK} width={58} />
+              <YAxis yAxisId="qty" orientation="right" tickFormatter={(v) => v.toLocaleString('zh-TW')} tick={CHART_TICK} width={44} />
+              <YAxis yAxisId="avg" orientation="right" hide />
               <Tooltip
-                formatter={(value: number, name: string) =>
-                  name === '業績' ? [formatCurrency(value), name] : [`${value.toLocaleString('zh-TW')} 件`, name]
-                }
                 contentStyle={CHART_TOOLTIP}
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  const d = payload[0]?.payload as typeof weekTrendData[0];
+                  const wow = d.prevRevenue != null
+                    ? ((d.revenue - d.prevRevenue) / Math.abs(d.prevRevenue || 1)) * 100
+                    : null;
+                  return (
+                    <div style={{ ...CHART_TOOLTIP, background: '#fff', padding: '10px 14px' }}>
+                      <p className="mb-1 text-xs font-semibold text-slate-500">{d.weekRange}</p>
+                      <p className="text-sm font-bold text-[#86B926]">業績 {formatCurrency(d.revenue)}</p>
+                      <p className="text-xs text-[#572A87]">件數 {d.qty.toLocaleString('zh-TW')} 件</p>
+                      <p className="text-xs text-[#984696]">單價 {formatCurrency(d.avgPrice)}</p>
+                      {wow != null && (
+                        <p className={`mt-1 text-xs font-semibold ${wow >= 0 ? 'text-[#86B926]' : 'text-red-500'}`}>
+                          {wow >= 0 ? '↑' : '↓'}{Math.abs(wow).toFixed(1)}% 較上週
+                        </p>
+                      )}
+                    </div>
+                  );
+                }}
               />
               <Legend wrapperStyle={CHART_LEGEND} />
-              <Line yAxisId="rev" type="monotone" dataKey="revenue" name="業績" stroke={CHART_PRIMARY} strokeWidth={CHART_STROKE_W} dot={{ r: 4, fill: CHART_PRIMARY }} activeDot={CHART_ACTIVE_DOT} />
-              <Line yAxisId="qty" type="monotone" dataKey="qty" name="銷量（件）" stroke={CHART_SECONDARY} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: CHART_SECONDARY }} />
+              <Line yAxisId="rev" type="monotone" dataKey="revenue" name="業績金額" stroke={CHART_PRIMARY} strokeWidth={CHART_STROKE_W} dot={{ r: 4, fill: CHART_PRIMARY }} activeDot={CHART_ACTIVE_DOT} />
+              <Line yAxisId="qty" type="monotone" dataKey="qty" name="銷售件數" stroke={CHART_SECONDARY} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: CHART_SECONDARY }} />
+              <Line yAxisId="avg" type="monotone" dataKey="avgPrice" name="平均單價" stroke="#984696" strokeWidth={1.5} strokeDasharray="2 2" dot={{ r: 2, fill: '#984696' }} />
             </LineChart>
           </ResponsiveContainer>
         </section>
