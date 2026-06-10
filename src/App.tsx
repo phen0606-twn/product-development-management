@@ -604,33 +604,37 @@ function ProductsPage() {
 
   return (
     <Page title="商品管理" subtitle="建立商品、編輯商品、查看詳情與進度">
-      <div className="flex flex-wrap items-end gap-3">
-        {/* 快速篩選按鈕 */}
-        <div className="flex overflow-hidden rounded-md border border-slate-200">
-          {(['all', 'active', 'completed'] as const).map((f) => (
-            <button key={f} type="button" onClick={() => setFilterStatus(f)}
-              className={`px-3 py-2 text-sm font-medium transition-colors ${
-                filterStatus === f ? 'bg-[#984696] text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
-              }`}>
-              {f === 'all' ? '全部' : f === 'active' ? '進行中' : '已完成'}
-            </button>
-          ))}
-        </div>
-        <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增商品" />
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-500">篩選廠商</span>
-          <select value={filterVendor} onChange={(e) => setFilterVendor(e.target.value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        {/* 左側：快速篩選 + 廠商下拉 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex overflow-hidden rounded-md border border-slate-200">
+            {(['all', 'active', 'completed'] as const).map((f) => (
+              <button key={f} type="button" onClick={() => setFilterStatus(f)}
+                className={`px-3 py-2 text-sm font-medium transition-colors ${
+                  filterStatus === f ? 'bg-[#984696] text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                }`}>
+                {f === 'all' ? '全部' : f === 'active' ? '進行中' : '已完成'}
+              </button>
+            ))}
+          </div>
+          <select value={filterVendor} onChange={(e) => setFilterVendor(e.target.value)}
+            className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600">
             <option value="">全部廠商</option>
             {vendors.rows.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
           </select>
-        </label>
-        {filterVendor && <p className="self-end pb-2 text-sm text-slate-500">共 {sortedProducts.length} 件商品</p>}
+          {filterVendor && <span className="text-sm text-slate-500">共 {sortedProducts.length} 件</span>}
+        </div>
+        {/* 右側：新增按鈕 */}
+        <button onClick={() => { setEditing(null); setOpen(true); }}
+          className="inline-flex shrink-0 items-center gap-2 rounded-md bg-sun px-4 py-2 text-sm text-white hover:opacity-90">
+          <Plus className="h-4 w-4" />新增商品
+        </button>
       </div>
       {message && <Notice tone="error">{message}</Notice>}
       {products.error && <Notice tone="error">商品資料讀取失敗：{products.error}</Notice>}
       {(progress.error || events.error) && <Notice tone="error">進度資料讀取失敗：{progress.error || events.error}</Notice>}
       {open && <ProductForm row={editing} vendors={vendors.rows} onCancel={() => setOpen(false)} onSave={save} />}
-      <Table columns={['SKU', '商品名稱', '分類', '狀態', '單位成本', '最近進度', '廠商', '操作']}>
+      <Table columns={['SKU', '商品名稱', '分類', '狀態', '成本', '最近進度', '廠商', '操作']}>
         {products.loading ? <LoadingRow /> : <>
           {/* ── 進行中商品 ── */}
           {displayActive.map((row) => {
@@ -645,11 +649,11 @@ function ProductsPage() {
                 </td>
                 <td className="p-3">{categoryLabel(row.category)}</td>
                 <td className="p-3">
-                  <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium bg-[#572A87] text-white">
+                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium bg-[#572A87] text-white">
                     {statusText(row.status)}
                   </span>
                 </td>
-                <td className="p-3 tabular-nums">{costs.loading || batches.loading ? <span className="text-slate-300 text-xs">…</span> : uc ? <span className="font-medium text-sun">{formatCurrency(uc)}</span> : <span className="text-slate-300">—</span>}</td>
+                <td className="min-w-[88px] p-3 tabular-nums">{costs.loading || batches.loading ? <span className="text-slate-300 text-xs">…</span> : uc ? <span className="font-medium text-sun">{formatCurrency(uc)}</span> : <span className="text-slate-300">—</span>}</td>
                 <td className="p-3">
                   <LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} />
                   {overdue && <p className="mt-1 text-xs font-medium text-red-500">⚠️ 已逾期</p>}
@@ -679,11 +683,11 @@ function ProductsPage() {
                 </td>
                 <td className="p-3" style={{ color: '#999999' }}>{categoryLabel(row.category)}</td>
                 <td className="p-3">
-                  <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: '#E5E5E5', color: '#999999' }}>
+                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: '#E5E5E5', color: '#999999' }}>
                     {statusText(row.status)}
                   </span>
                 </td>
-                <td className="p-3 tabular-nums" style={{ color: '#999999' }}>{costs.loading || batches.loading ? <span className="text-xs" style={{ color: '#CCCCCC' }}>…</span> : uc ? formatCurrency(uc) : '—'}</td>
+                <td className="min-w-[88px] p-3 tabular-nums" style={{ color: '#999999' }}>{costs.loading || batches.loading ? <span className="text-xs" style={{ color: '#CCCCCC' }}>…</span> : uc ? formatCurrency(uc) : '—'}</td>
                 <td className="p-3">
                   <LatestProgress product={row} progress={mergeProgressRows(row.id, progress.rows, events.rows)} dim />
                 </td>
