@@ -43,6 +43,7 @@ const statusOptions = [
   ['in_development', '開發中'],
   ['mass_production', '大貨中'],
   ['delayed', '延遲'],
+  ['paused', '暫停'],
   ['launched', '已上架'],
   ['completed', '完成'],
 ] as const;
@@ -85,7 +86,7 @@ const ACTIVE_STATUS_SET = new Set(['in_development', 'quoting', 'mass_production
 const STATUS_SORT_ORDER: Record<string, number> = {
   in_development: 0, quoting: 1, mass_production: 2,
   planning: 3, delayed: 4,
-  completed: 5, launched: 6,
+  paused: 5, completed: 6, launched: 7,
 };
 
 export default function App() {
@@ -455,6 +456,25 @@ function Dashboard() {
       .sort((a, b) => b.diffDays - a.diffDays);
   }, [products.rows, progress.rows, events.rows, today]);
 
+  // 暫停超過 30 天
+  const stalePaused = useMemo(() => {
+    return products.rows
+      .filter((p) => p.status === 'paused')
+      .map((p) => {
+        const rows = mergeProgressRows(p.id, progress.rows, events.rows);
+        const latest = rows.slice().sort((a, b) =>
+          String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at))
+        )[0];
+        const latestDate = String(latest?.started_at || latest?.created_at || '').slice(0, 10);
+        const diffDays = latestDate
+          ? Math.floor((new Date(today + 'T00:00:00').getTime() - new Date(latestDate + 'T00:00:00').getTime()) / 86400000)
+          : 9999;
+        return { product: p, diffDays };
+      })
+      .filter((x) => x.diffDays >= 30)
+      .sort((a, b) => b.diffDays - a.diffDays);
+  }, [products.rows, progress.rows, events.rows, today]);
+
   // 即將到期（14 天內）
   const upcomingLaunch = useMemo(() =>
     products.rows
@@ -518,7 +538,7 @@ function Dashboard() {
           </div>
         </section>
       )}
-      {(todayUpdates.length > 0 || staleActive.length > 0 || upcomingLaunch.length > 0) && (
+      {(todayUpdates.length > 0 || staleActive.length > 0 || stalePaused.length > 0 || upcomingLaunch.length > 0) && (
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
           <h3 className="mb-4 font-semibold text-ink">待追蹤提醒</h3>
           <div className="space-y-5">
@@ -547,6 +567,22 @@ function Dashboard() {
                         ⚠️ {product.name}
                       </Link>
                       <span className="text-xs font-medium text-amber-700">已 {diffDays === 9999 ? '—' : diffDays} 天未更新</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* 暫停超過 30 天 */}
+            {stalePaused.length > 0 && (
+              <div>
+                <p className="mb-2 text-sm font-medium text-slate-500">暫停超過 30 天（{stalePaused.length} 件）</p>
+                <div className="space-y-1.5">
+                  {stalePaused.map(({ product, diffDays }) => (
+                    <div key={product.id} className="flex items-center justify-between rounded-md bg-orange-50 px-3 py-2 text-sm">
+                      <Link to={`/products/${product.id}`} className="font-medium text-leaf hover:underline">
+                        🔸 {product.name}
+                      </Link>
+                      <span className="text-xs font-medium text-orange-700">已暫停 {diffDays === 9999 ? '—' : diffDays} 天</span>
                     </div>
                   ))}
                 </div>
@@ -590,7 +626,7 @@ function ProductsPage() {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [filterVendor, setFilterVendor] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'completed'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'paused' | 'completed'>('all');
   const [showCompleted, setShowCompleted] = useState(false);
 
   // 各商品的最新進度日期（用於同狀態內排序：由新到舊）
@@ -616,7 +652,9 @@ function ProductsPage() {
   }, [products.rows, filterVendor, latestDateByProduct]);
 
   const activeProducts = useMemo(() => sortedProducts.filter((p) => ACTIVE_STATUS_SET.has(p.status)), [sortedProducts]);
-  const completedProducts = useMemo(() => sortedProducts.filter((p) => !ACTIVE_STATUS_SET.has(p.status)), [sortedProducts]);
+  const pausedProducts = useMemo(() => sortedProducts.filter((p) => p.status === 'paused'), [sortedProducts]);
+  const completedProducts = useMemo(() => sortedProducts.filter((p) => !ACTIVE_STATUS_SET.has(p.status) && p.status !== 'paused'), [sortedProducts]);
+  const nonActiveProducts = useMemo(() => sortedProducts.filter((p) => !ACTIVE_STATUS_SET.has(p.status)), [sortedProducts]);
 
   // 完整單位成本 = (直接費用 + 歸入配件費用) ÷ 總訂購數量
   // 與商品詳情頁邏輯保持完全一致：
@@ -699,10 +737,13 @@ function ProductsPage() {
   const isOverdue = (row: Row) =>
     ACTIVE_STATUS_SET.has(row.status) && !!row.target_launch_date && String(row.target_launch_date) < today;
 
-  // 「全部」模式下才顯示收合按鈕；篩選「已完成」時直接全展開
-  const showToggle = filterStatus === 'all' && completedProducts.length > 0;
-  const displayActive = filterStatus !== 'completed' ? activeProducts : [];
-  const displayCompleted = filterStatus !== 'active' ? completedProducts : [];
+  // 「全部」模式下才顯示收合按鈕；個別篩選時直接全展開
+  const showToggle = filterStatus === 'all' && nonActiveProducts.length > 0;
+  const displayActive = (filterStatus === 'all' || filterStatus === 'active') ? activeProducts : [];
+  const displayNonActive =
+    filterStatus === 'paused' ? pausedProducts :
+    filterStatus === 'completed' ? completedProducts :
+    (filterStatus === 'all' && showCompleted) ? nonActiveProducts : [];
 
   return (
     <Page title="商品管理" subtitle="建立商品、編輯商品、查看詳情與進度">
@@ -710,12 +751,12 @@ function ProductsPage() {
         {/* 左側：快速篩選 + 廠商下拉 */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex overflow-hidden rounded-md border border-slate-200">
-            {(['all', 'active', 'completed'] as const).map((f) => (
+            {(['all', 'active', 'paused', 'completed'] as const).map((f) => (
               <button key={f} type="button" onClick={() => setFilterStatus(f)}
                 className={`px-3 py-2 text-sm font-medium transition-colors ${
                   filterStatus === f ? 'bg-[#984696] text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
                 }`}>
-                {f === 'all' ? '全部' : f === 'active' ? '進行中' : '已完成'}
+                {f === 'all' ? '全部' : f === 'active' ? '進行中' : f === 'paused' ? '暫停' : '已完成'}
               </button>
             ))}
           </div>
@@ -776,16 +817,19 @@ function ProductsPage() {
             );
           })}
           {/* ── 分隔線（全部模式展開時顯示） ── */}
-          {showToggle && showCompleted && activeProducts.length > 0 && completedProducts.length > 0 && (
+          {showToggle && showCompleted && activeProducts.length > 0 && nonActiveProducts.length > 0 && (
             <tr className="border-t">
               <td colSpan={9} className="px-3 py-2 text-center text-xs text-slate-400 select-none">
-                ── 以下為已完成商品 ──
+                ── 以下為暫停 / 已完成商品 ──
               </td>
             </tr>
           )}
-          {/* ── 已完成商品 ── */}
-          {(filterStatus === 'completed' || (showToggle && showCompleted)) && displayCompleted.map((row) => {
+          {/* ── 暫停 / 已完成商品 ── */}
+          {displayNonActive.map((row) => {
             const uc = unitCostByProduct.get(row.id);
+            const isPaused = row.status === 'paused';
+            const badgeBg = isPaused ? '#C07A2E' : '#E5E5E5';
+            const badgeColor = isPaused ? '#ffffff' : '#999999';
             return (
               <tr key={row.id} className="border-t align-top" style={{ backgroundColor: '#F5F5F5' }}>
                 <td className="p-3" style={{ color: '#999999' }}>{row.sku}</td>
@@ -804,7 +848,7 @@ function ProductsPage() {
                 </td>
                 <td className="p-3" style={{ color: '#999999' }}>{categoryLabel(row.category)}</td>
                 <td className="p-3">
-                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: '#E5E5E5', color: '#999999' }}>
+                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: badgeBg, color: badgeColor }}>
                     {statusText(row.status)}
                   </span>
                 </td>
@@ -820,11 +864,11 @@ function ProductsPage() {
           })}
         </>}
       </Table>
-      {/* 已完成商品展開 / 收合按鈕 */}
+      {/* 暫停 / 已完成商品展開收合按鈕 */}
       {showToggle && (
         <button type="button" onClick={() => setShowCompleted((v) => !v)}
           className="mt-3 w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-50">
-          {showCompleted ? '收起已完成商品 ▲' : `顯示已完成商品（${completedProducts.length} 件）▼`}
+          {showCompleted ? '收起 ▲' : `顯示暫停與已完成商品（${nonActiveProducts.length} 件）▼`}
         </button>
       )}
     </Page>
