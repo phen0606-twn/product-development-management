@@ -487,19 +487,30 @@ function ProductsPage() {
   );
 
   // 完整單位成本 = (直接費用 + 歸入配件費用) ÷ 總訂購數量
+  // 與商品詳情頁邏輯保持完全一致：
+  //   1. 先算出「歸入集合」(attributedCostIds)，再用它排除 directCosts 的重疊
+  //   2. 同時包含舊版 attributed_to_product_id 格式的配件費用 (legacyAttrCosts)
   const unitCostByProduct = useMemo(() => {
     const map = new Map<string, number>();
     for (const product of products.rows) {
       const pid = product.id;
       const prodBatches = batches.rows.filter((b) => b.product_id === pid);
       const prodBatchIds = new Set(prodBatches.map((b) => b.id));
-      const directCosts = costs.rows.filter(
-        (c) => c.product_id === pid || (c.batch_id && prodBatchIds.has(c.batch_id))
-      );
+      // 步驟 1：歸入配件費用（批次層級）—— 其他商品費用 attributed_to 本商品批次
       const attrCosts = costs.rows.filter(
         (c) => c.attributed_to_batch_id && prodBatchIds.has(c.attributed_to_batch_id) && c.product_id !== pid
       );
-      const totalCost = [...directCosts, ...attrCosts].reduce((s, c) => s + costTotal(c), 0);
+      const attrCostIds = new Set(attrCosts.map((c) => c.id));
+      // 步驟 2：直接費用 —— 排除已計入歸入集合的項目，避免重複計算
+      const directCosts = costs.rows.filter(
+        (c) => (c.product_id === pid || (c.batch_id && prodBatchIds.has(c.batch_id))) && !attrCostIds.has(c.id)
+      );
+      // 步驟 3：舊版歸入（商品層級，無 attributed_to_batch_id）
+      const legacyAttrCosts = costs.rows.filter(
+        (c) => c.attributed_to_product_id === pid && c.product_id !== pid
+            && !c.attributed_to_batch_id && !(c.batch_id && prodBatchIds.has(c.batch_id))
+      );
+      const totalCost = [...directCosts, ...attrCosts, ...legacyAttrCosts].reduce((s, c) => s + costTotal(c), 0);
       const totalQty = prodBatches.reduce((s, b) => s + (Number(b.quantity) || 0), 0);
       if (totalQty > 0 && totalCost > 0) map.set(pid, Math.round(totalCost / totalQty));
     }
@@ -1041,7 +1052,7 @@ function ProductDetailPage() {
                     <tfoot className="border-t-2 border-moss/30 bg-moss/10">
                       <tr>
                         <td colSpan={3} className="px-4 py-2.5 text-right text-sm font-medium text-moss">配件費用合計</td>
-                        <td className="px-4 py-2.5 font-bold text-moss">{formatCurrency(attributedTotal)}</td>
+                        <td className="px-4 py-2.5 font-bold text-moss">{formatCurrency(legacyAttributedCosts.reduce((s, c) => s + costTotal(c), 0))}</td>
                       </tr>
                     </tfoot>
                   </table>
@@ -1690,10 +1701,11 @@ function SalesPage() {
       const prevDate = i > 0 ? recent[i - 1] : null;
       const prevRows = prevDate ? sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === prevDate) : [];
       const prevRev  = prevRows.length ? sum(prevRows, 'revenue') : null;
-      const d  = new Date(date + 'T00:00:00');
-      const sd = new Date(d); sd.setDate(sd.getDate() - 6);
+      const d  = new Date(date + 'T00:00:00');   // sold_at = 週開始
+      const ed = new Date(d); ed.setDate(ed.getDate() + 6);  // 週結束
       const fmt = (x: Date) => `${x.getMonth() + 1}/${x.getDate()}`;
-      return { date, label: fmt(d), weekRange: `${fmt(sd)}–${fmt(d)}`,
+      const weekRange = `${fmt(d)}-${fmt(ed)}`;
+      return { date, label: weekRange, weekRange,
                revenue: rev, qty: q, avgPrice: avg, prevRevenue: prevRev };
     });
   }, [sales.rows, weekCount]);
@@ -1839,9 +1851,9 @@ function SalesPage() {
             </div>
           </div>
           <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={weekTrendData} margin={{ top: 4, right: 50, left: 0, bottom: 0 }}>
+            <LineChart data={weekTrendData} margin={{ top: 4, right: 50, left: 0, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
-              <XAxis dataKey="label" tick={CHART_TICK_MD} />
+              <XAxis dataKey="weekRange" tick={{ ...CHART_TICK_MD, angle: -30, textAnchor: 'end' }} height={50} interval={0} />
               <YAxis yAxisId="rev" tickFormatter={(v) => `$${(v / 10000).toFixed(0)}萬`} tick={CHART_TICK} width={58} />
               <YAxis yAxisId="qty" orientation="right" tickFormatter={(v) => v.toLocaleString('zh-TW')} tick={CHART_TICK} width={44} />
               <YAxis yAxisId="avg" orientation="right" hide />
@@ -3509,6 +3521,7 @@ function ImportPage() {
   const [salesFile, setSalesFile] = useState('');
   const [salesSkipped, setSalesSkipped] = useState(0);
   const [importDate, setImportDate] = useState(new Date().toISOString().slice(0, 10));
+  const [importWeekEnd, setImportWeekEnd] = useState('');
   const [salesImporting, setSalesImporting] = useState(false);
   const totalRevenue = salesRows.reduce((s, r) => s + Number(r.revenue ?? 0), 0);
   const totalQty = salesRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
@@ -3534,9 +3547,24 @@ function ImportPage() {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const file = form.get('file');
-    const date = String(form.get('date'));
     if (!(file instanceof File)) return;
+
+    // ── 自動從檔名解析週別（格式：20260525-0531新事業銷售統計）──
+    let date = String(form.get('date'));
+    const weekMatch = (file as File).name.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
+    let detectedWeekEnd = '';
+    if (weekMatch) {
+      const [, year, startMonth, startDay, , endDay] = weekMatch;
+      const weekStart = `${year}-${startMonth}-${startDay}`;
+      const endMonthNum = parseInt(endDay) < parseInt(startDay)
+        ? String(parseInt(startMonth) + 1).padStart(2, '0')
+        : startMonth;
+      detectedWeekEnd = `${year}-${endMonthNum}-${endDay}`;
+      date = weekStart;
+    }
     setImportDate(date);
+    setImportWeekEnd(detectedWeekEnd);
+
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
     const parsed = parseSalesImport(workbook, XLSX.utils, date);
@@ -3551,10 +3579,19 @@ function ImportPage() {
 
     // ── 冪等性預檢：查詢 DB 是否已有相同日期資料 ──
     const dates = [...new Set(parsed.salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
-    let baseMsg = `已解析 ${parsed.salesRows.length} 筆商品業績`;
-    if (parsed.storeRows.length) baseMsg += `、${parsed.storeRows.length} 筆門市業績`;
-    if (parsed.skipped > 0) baseMsg += `（略過 ${parsed.skipped} 筆空白列）`;
-    baseMsg += `。涵蓋日期：${dates.join('、')}。`;
+    const parsedTotalQty = parsed.salesRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+    const parsedTotalRev = parsed.salesRows.reduce((s, r) => s + Number(r.revenue ?? 0), 0);
+    let baseMsg = detectedWeekEnd
+      ? `📅 週別：${date} ～ ${detectedWeekEnd}　已解析 ${parsed.salesRows.length} 筆｜${parsedTotalQty.toLocaleString('zh-TW')} 件｜${formatCurrency(parsedTotalRev)}`
+      : `已解析 ${parsed.salesRows.length} 筆商品業績`;
+    if (!detectedWeekEnd) {
+      if (parsed.storeRows.length) baseMsg += `、${parsed.storeRows.length} 筆門市業績`;
+      if (parsed.skipped > 0) baseMsg += `（略過 ${parsed.skipped} 筆空白列）`;
+      baseMsg += `。涵蓋日期：${dates.join('、')}。`;
+    } else {
+      if (parsed.skipped > 0) baseMsg += `（略過 ${parsed.skipped} 筆）`;
+      baseMsg += '。';
+    }
     if (supabase) {
       const checks = await Promise.all(
         dates.map((d) => supabase!.from('sales_records').select('id', { count: 'exact', head: true }).eq('sold_at', d))
@@ -3625,10 +3662,13 @@ function ImportPage() {
     const newCount       = salesRows.filter((r) => newDates.includes(String(r.sold_at || ''))).length;
     const overwriteCount = salesRows.filter((r) => overwriteDates.includes(String(r.sold_at || ''))).length;
     const oldTotal       = overwriteDates.reduce((s, d) => s + (existingByDate.get(d) ?? 0), 0);
+    const importedTotalQty = salesRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+    const importedTotalRev = salesRows.reduce((s, r) => s + Number(r.revenue ?? 0), 0);
     const parts: string[] = [];
     if (newCount > 0)       parts.push(`🟢 新增 ${newCount} 筆（${newDates.join('、')}）`);
     if (overwriteCount > 0) parts.push(`🔄 覆蓋 ${overwriteCount} 筆（取代舊有 ${oldTotal} 筆，日期：${overwriteDates.join('、')}）`);
     if (salesSkipped > 0)   parts.push(`⚪ 略過 ${salesSkipped} 筆（空白或無效列）`);
+    parts.push(`📊 總計 ${importedTotalQty.toLocaleString('zh-TW')} 件 / ${formatCurrency(importedTotalRev)}`);
     setSalesMsg(`✅ 匯入完成｜${parts.join('　')}`);
 
     setSalesRows([]); setChannelRows([]); setStoreRows([]); setProductStoreRows([]);
@@ -3800,8 +3840,8 @@ function ImportPage() {
         <h3 className="mb-4 font-semibold">業績匯入</h3>
         <form onSubmit={previewSales}>
           <div className="grid gap-3 md:grid-cols-3">
-            <label className="text-sm">業績日期（週末日）<input name="date" type="date" defaultValue={importDate} className="mt-1 w-full rounded-md border px-3 py-2" /></label>
-            <label className="text-sm md:col-span-2">Excel 檔案<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
+            <label className="text-sm">{importWeekEnd ? `業績週別（週開始日）` : '業績日期（週末日）'}<input name="date" type="date" value={importDate} onChange={(ev) => setImportDate(ev.target.value)} className="mt-1 w-full rounded-md border px-3 py-2" />{importWeekEnd && <span className="mt-0.5 block text-xs text-slate-500">週結束：{importWeekEnd}</span>}</label>
+            <label className="text-sm md:col-span-2">Excel 檔案（週報格式從檔名自動偵測日期）<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
           </div>
           <button className="mt-4 rounded-md bg-sun px-4 py-2 text-sm text-white">預覽業績資料</button>
           {salesMsg && <p className="mt-3 text-sm text-slate-600">{salesMsg}</p>}
@@ -4249,7 +4289,56 @@ function parseNumber(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// ── 格式 D：新事業銷售統計週報（多工作表，各商品一個 sheet）──
+// 偵測條件：sheetNames 包含「新事業銷售總覽」
+// 資料 sheet 格式（row 0 = header）：
+//   col 0=日期範圍, col 1=商品型號(SKU), col 2=分店代號, col 3=數量,
+//   col 4=應售金額, col 5=實售金額, col 11=品名規格, col 12=分店名稱, col 13=分店
+const WEEKLY_SKIP_SHEETS = new Set([
+  '新事業商品', '分店代號', '新事業銷售總覽', '新事業商品庫存總覽',
+]);
+function isWeeklySkipSheet(name: string) {
+  return WEEKLY_SKIP_SHEETS.has(name.trim()) || /各倉|附加/.test(name);
+}
+
+function parseWeeklySales(workbook: any, utils: any, weekStart: string) {
+  let skipped = 0;
+  const salesRows: Row[] = [];
+  for (const sheetName of workbook.SheetNames as string[]) {
+    if (isWeeklySkipSheet(sheetName)) continue;
+    const rows = utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false }) as unknown[][];
+    for (const row of rows.slice(1)) {  // skip header row
+      const r = row as any[];
+      const sku = String(r[1] ?? '').trim();
+      if (!sku) { skipped++; continue; }
+      const qty     = Number(r[3] ?? 0) || 0;
+      const revRaw  = r[5];
+      const revenue = (revRaw === '' || revRaw === null || revRaw === undefined ||
+                       (typeof revRaw === 'number' && !isFinite(revRaw))) ? 0 : Number(revRaw) || 0;
+      const productName = String(r[11] ?? '').trim();
+      const storeCode   = String(r[2]  ?? '').trim();
+      const storeName   = String(r[12] ?? '').trim();
+      const fullStore   = String(r[13] ?? '').trim() || `${storeCode} ${storeName}`.trim();
+      salesRows.push({
+        product_id: null,
+        external_sku: sku,
+        external_product_name: productName,
+        sold_at: weekStart,
+        quantity: qty,
+        revenue,
+        channel: classifyStore(fullStore || storeCode),
+        notes: fullStore || storeCode,
+      });
+    }
+  }
+  return { salesRows, channelRows: [], storeRows: [], productStoreRows: [], skipped };
+}
+
 function parseSalesImport(workbook: any, utils: any, fallbackDate: string) {
+  // ── 格式 D：新事業銷售統計週報（偵測「新事業銷售總覽」sheet）──
+  if ((workbook.SheetNames as string[]).includes('新事業銷售總覽')) {
+    return parseWeeklySales(workbook, utils, fallbackDate);
+  }
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false }) as unknown[][];
   const headerIndex = rows.findIndex((r) => r.some((c) => String(c).trim() === '商品') && r.some((c) => String(c).trim() === '實售總金額'));
