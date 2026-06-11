@@ -4631,18 +4631,30 @@ function parseWeeklySales(workbook: any, utils: any, weekStart: string, weekLabe
   for (const sheetName of workbook.SheetNames as string[]) {
     if (isWeeklySkipSheet(sheetName)) continue;
     const rows = utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false }) as unknown[][];
-    for (const row of rows.slice(1)) {  // skip header row
+    if (rows.length < 2) continue;
+    // 從 header 動態偵測欄位位置，相容不同版本格式
+    const header = (rows[0] as any[]).map((c) => String(c ?? '').trim());
+    const col = (...names: string[]) => { for (const n of names) { const i = header.indexOf(n); if (i >= 0) return i; } return -1; };
+    const si  = col('商品型號', '型號', 'SKU', '商品') >= 0 ? col('商品型號', '型號', 'SKU', '商品') : 1;
+    const qi  = col('銷售總數量', '數量') >= 0 ? col('銷售總數量', '數量') : 3;
+    const ri  = col('實售總金額', '實售金額') >= 0 ? col('實售總金額', '實售金額') : 5;
+    const ni  = col('品名規格', '商品名稱', '品名');
+    const ci  = col('分店代號') >= 0 ? col('分店代號') : 2;
+    const sni = col('分店名稱') >= 0 ? col('分店名稱') : 12;
+    const fsi = col('分店') >= 0 ? col('分店') : 13;
+    for (const row of rows.slice(1)) {
       const r = row as any[];
-      const sku = String(r[1] ?? '').trim();
+      const sku = String(r[si] ?? '').trim();
       if (!sku) { skipped++; continue; }
-      const qty     = Number(r[3] ?? 0) || 0;
-      const revRaw  = r[5];
+      const qty    = Number(r[qi] ?? 0) || 0;
+      const revRaw = r[ri];
       const revenue = (revRaw === '' || revRaw === null || revRaw === undefined ||
                        (typeof revRaw === 'number' && !isFinite(revRaw))) ? 0 : Number(revRaw) || 0;
-      const productName = String(r[11] ?? '').trim();
-      const storeCode   = String(r[2]  ?? '').trim();
-      const storeName   = String(r[12] ?? '').trim();
-      const fullStore   = String(r[13] ?? '').trim() || `${storeCode} ${storeName}`.trim();
+      if (!qty && !revenue) { skipped++; continue; }
+      const productName = (ni >= 0 ? String(r[ni] ?? '') : String(r[si] ?? '')).trim() || sku;
+      const storeCode   = String(r[ci]  ?? '').trim();
+      const storeName   = String(r[sni] ?? '').trim();
+      const fullStore   = String(r[fsi] ?? '').trim() || `${storeCode} ${storeName}`.trim();
       salesRows.push({
         product_id: null,
         external_sku: sku,
@@ -4651,7 +4663,7 @@ function parseWeeklySales(workbook: any, utils: any, weekStart: string, weekLabe
         quantity: qty,
         revenue,
         channel: classifyStore(fullStore || storeCode),
-        notes: fullStore || storeCode,
+        notes: fullStore || storeCode || null,
         week_label: weekLabel || null,
       });
     }
