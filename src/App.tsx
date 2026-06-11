@@ -3867,6 +3867,12 @@ function ImportPage() {
     const [, year, startMonth, startDay, endMonth, endDay] = weekMatch;
     const weekStart = `${year}-${startMonth}-${startDay}`;
     const weekEnd = `${year}-${endMonth}-${endDay}`;
+    const startD = new Date(weekStart + 'T00:00:00');
+    const endD   = new Date(weekEnd   + 'T00:00:00');
+    if (isNaN(startD.getTime()) || isNaN(endD.getTime()) || startD > endD) {
+      setSalesMsg(`❌ 從檔名解析出的日期無效（${weekStart} ～ ${weekEnd}），請確認格式：20260525-0531業績明細表.xlsx`);
+      return;
+    }
     const fmtL = (ds: string) => { const m = ds.match(/-(\d+)-(\d+)$/); return m ? `${+m[1]}/${+m[2]}` : ds; };
     const weekLabel = `${fmtL(weekStart)}-${fmtL(weekEnd)}`;
     setImportDate(weekStart);
