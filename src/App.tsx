@@ -3858,29 +3858,23 @@ function ImportPage() {
     const file = form.get('file');
     if (!(file instanceof File)) return;
 
-    // ── 自動從檔名解析週別（格式：20260525-0531新事業銷售統計）──
-    let date = String(form.get('date'));
+    // ── 從檔名解析週別（必填，格式：20260525-0531業績明細表）──
     const weekMatch = (file as File).name.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
-    let detectedWeekEnd = '';
-    let weekLabel = '';
-    if (weekMatch) {
-      const [, year, startMonth, startDay, , endDay] = weekMatch;
-      const weekStart = `${year}-${startMonth}-${startDay}`;
-      const endMonthNum = parseInt(endDay) < parseInt(startDay)
-        ? String(parseInt(startMonth) + 1).padStart(2, '0')
-        : startMonth;
-      detectedWeekEnd = `${year}-${endMonthNum}-${endDay}`;
-      date = weekStart;
-      // 從日期字串去掉前置零，例：2026-05-01 → "5/1"、2026-05-10 → "5/10"
-      const fmtL = (ds: string) => { const m = ds.match(/-(\d+)-(\d+)$/); return m ? `${+m[1]}/${+m[2]}` : ds; };
-      weekLabel = `${fmtL(date)}-${fmtL(detectedWeekEnd)}`;
+    if (!weekMatch) {
+      setSalesMsg('❌ 無法從檔名解析日期區間，請確認格式：20260525-0531業績明細表.xlsx');
+      return;
     }
-    setImportDate(date);
-    setImportWeekEnd(detectedWeekEnd);
+    const [, year, startMonth, startDay, endMonth, endDay] = weekMatch;
+    const weekStart = `${year}-${startMonth}-${startDay}`;
+    const weekEnd = `${year}-${endMonth}-${endDay}`;
+    const fmtL = (ds: string) => { const m = ds.match(/-(\d+)-(\d+)$/); return m ? `${+m[1]}/${+m[2]}` : ds; };
+    const weekLabel = `${fmtL(weekStart)}-${fmtL(weekEnd)}`;
+    setImportDate(weekStart);
+    setImportWeekEnd(weekEnd);
 
     const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
     const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-    const parsed = parseSalesImport(workbook, XLSX.utils, date, weekLabel);
+    const parsed = parseSalesImport(workbook, XLSX.utils, weekStart, weekLabel);
     setSalesRows(parsed.salesRows); setChannelRows(parsed.channelRows);
     setStoreRows(parsed.storeRows); setProductStoreRows(parsed.productStoreRows);
     setSalesSkipped(parsed.skipped);
@@ -3890,32 +3884,20 @@ function ImportPage() {
       return;
     }
 
-    // ── 冪等性預檢：查詢 DB 是否已有相同日期資料 ──
-    const dates = [...new Set(parsed.salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
     const parsedTotalQty = parsed.salesRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
     const parsedTotalRev = parsed.salesRows.reduce((s, r) => s + Number(r.revenue ?? 0), 0);
-    let baseMsg = detectedWeekEnd
-      ? `📅 週別：${date} ～ ${detectedWeekEnd}　已解析 ${parsed.salesRows.length} 筆｜${parsedTotalQty.toLocaleString('zh-TW')} 件｜${formatCurrency(parsedTotalRev)}`
-      : `已解析 ${parsed.salesRows.length} 筆商品業績`;
-    if (!detectedWeekEnd) {
-      if (parsed.storeRows.length) baseMsg += `、${parsed.storeRows.length} 筆門市業績`;
-      if (parsed.skipped > 0) baseMsg += `（略過 ${parsed.skipped} 筆空白列）`;
-      baseMsg += `。涵蓋日期：${dates.join('、')}。`;
-    } else {
-      if (parsed.skipped > 0) baseMsg += `（略過 ${parsed.skipped} 筆）`;
-      baseMsg += '。';
-    }
+    let baseMsg = `📅 日期區間：${weekLabel}　已解析 ${parsed.salesRows.length} 筆｜${parsedTotalQty.toLocaleString('zh-TW')} 件｜${formatCurrency(parsedTotalRev)}`;
+    if (parsed.skipped > 0) baseMsg += `（略過 ${parsed.skipped} 筆）`;
+
     if (supabase) {
-      const checks = await Promise.all(
-        dates.map((d) => supabase!.from('sales_records').select('id', { count: 'exact', head: true }).eq('sold_at', d))
-      );
-      const existing = dates.map((d, i) => ({ date: d, count: checks[i].count ?? 0 })).filter((x) => x.count > 0);
-      if (existing.length > 0) {
-        const warn = existing.map((x) => `${x.date}（已有 ${x.count} 筆）`).join('、');
-        baseMsg += ` ⚠ 以下日期已有舊資料將被覆蓋：${warn}。`;
-      } else {
-        baseMsg += ` ✓ 全部為新日期，不覆蓋任何舊資料。`;
-      }
+      const { count: existingCount } = await supabase
+        .from('sales_records')
+        .select('id', { count: 'exact', head: true })
+        .gte('sold_at', weekStart)
+        .lte('sold_at', weekEnd);
+      baseMsg += (existingCount ?? 0) > 0
+        ? ` ⚠ 區間內已有 ${existingCount} 筆舊資料將被覆蓋。`
+        : ` ✓ 區間內無舊資料。`;
     }
     baseMsg += ' 確認無誤後請匯入。';
     setSalesMsg(baseMsg);
@@ -3924,33 +3906,35 @@ function ImportPage() {
   async function doSalesImport() {
     if (!supabase || salesRows.length === 0) return;
     setSalesImporting(true);
-    const soldDates = [...new Set(salesRows.map((r) => String(r.sold_at || '')).filter(Boolean))];
+    const weekStart = importDate;
+    const weekEnd = importWeekEnd || importDate;
+    const fmtL = (ds: string) => { const m = ds.match(/-(\d+)-(\d+)$/); return m ? `${+m[1]}/${+m[2]}` : ds; };
+    const rangeLabel = weekEnd !== weekStart ? `${fmtL(weekStart)}-${fmtL(weekEnd)}` : fmtL(weekStart);
 
-    // ── 步驟 1：記錄各日期在 DB 的現有筆數（用來判斷是新增還是覆蓋）──
+    // ── 步驟 1：計算區間內現有筆數 ──
     setSalesMsg('⏳ 步驟 1/3：確認現有資料...');
-    const existingChecks = await Promise.all(
-      soldDates.map((d) => supabase!.from('sales_records').select('id', { count: 'exact', head: true }).eq('sold_at', d))
-    );
-    const existingByDate = new Map(soldDates.map((d, i) => [d, existingChecks[i].count ?? 0]));
-    const overwriteDates = soldDates.filter((d) => (existingByDate.get(d) ?? 0) > 0);
-    const newDates       = soldDates.filter((d) => (existingByDate.get(d) ?? 0) === 0);
+    const { count: oldCount } = await supabase
+      .from('sales_records')
+      .select('id', { count: 'exact', head: true })
+      .gte('sold_at', weekStart)
+      .lte('sold_at', weekEnd);
+    const deletedCount = oldCount ?? 0;
 
-    // ── 步驟 2：逐一刪除舊資料（相同日期全部清除），任一失敗立即中止 ──
-    setSalesMsg(`⏳ 步驟 2/3：清除${overwriteDates.length > 0 ? `舊資料（${overwriteDates.join('、')}）` : '（無舊資料需清除）'}...`);
+    // ── 步驟 2：刪除區間內所有舊資料 ──
+    setSalesMsg(`⏳ 步驟 2/3：清除${deletedCount > 0 ? `舊資料（${rangeLabel}，共 ${deletedCount} 筆）` : '（無舊資料需清除）'}...`);
     const TABLES_TO_DELETE = [
       { table: 'sales_records',              col: 'sold_at'     },
       { table: 'channel_sales_records',       col: 'sales_month' },
       { table: 'channel_store_sales_records', col: 'sales_month' },
       { table: 'product_store_sales',         col: 'sales_month' },
     ] as const;
-    for (const date of soldDates) {
-      for (const { table, col } of TABLES_TO_DELETE) {
-        const { error: delErr } = await supabase.from(table).delete().eq(col, date);
-        if (delErr) {
-          setSalesMsg(`❌ 刪除失敗（${table} / ${date}）：${delErr.message}。匯入已中止，資料未變動。`);
-          setSalesImporting(false);
-          return;
-        }
+    for (const { table, col } of TABLES_TO_DELETE) {
+      const { error: delErr } = await supabase.from(table).delete()
+        .gte(col, weekStart).lte(col, weekEnd);
+      if (delErr) {
+        setSalesMsg(`❌ 刪除失敗（${table}）：${delErr.message}。匯入已中止，資料未變動。`);
+        setSalesImporting(false);
+        return;
       }
     }
 
@@ -3964,7 +3948,8 @@ function ImportPage() {
 
     // ── 驗證：確認 DB 筆數與預期一致 ──
     const { count: dbCount } = await supabase
-      .from('sales_records').select('id', { count: 'exact', head: true }).in('sold_at', soldDates);
+      .from('sales_records').select('id', { count: 'exact', head: true })
+      .gte('sold_at', weekStart).lte('sold_at', weekEnd);
     if (dbCount !== salesRows.length) {
       setSalesMsg(`⚠ 匯入完成但數量異常：預期 ${salesRows.length} 筆，資料庫實際 ${dbCount} 筆。請聯絡管理員確認。`);
       setSalesImporting(false);
@@ -3972,16 +3957,15 @@ function ImportPage() {
     }
 
     // ── 結果報告 ──
-    const newCount       = salesRows.filter((r) => newDates.includes(String(r.sold_at || ''))).length;
-    const overwriteCount = salesRows.filter((r) => overwriteDates.includes(String(r.sold_at || ''))).length;
-    const oldTotal       = overwriteDates.reduce((s, d) => s + (existingByDate.get(d) ?? 0), 0);
     const importedTotalQty = salesRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
     const importedTotalRev = salesRows.reduce((s, r) => s + Number(r.revenue ?? 0), 0);
-    const parts: string[] = [];
-    if (newCount > 0)       parts.push(`🟢 新增 ${newCount} 筆（${newDates.join('、')}）`);
-    if (overwriteCount > 0) parts.push(`🔄 覆蓋 ${overwriteCount} 筆（取代舊有 ${oldTotal} 筆，日期：${overwriteDates.join('、')}）`);
-    if (salesSkipped > 0)   parts.push(`⚪ 略過 ${salesSkipped} 筆（空白或無效列）`);
-    parts.push(`📊 總計 ${importedTotalQty.toLocaleString('zh-TW')} 件 / ${formatCurrency(importedTotalRev)}`);
+    const parts = [
+      `📅 日期區間：${rangeLabel}`,
+      deletedCount > 0 ? `🗑 刪除舊資料 ${deletedCount} 筆` : `🆕 無舊資料（全部新增）`,
+      `✅ 新寫入 ${salesRows.length} 筆`,
+      `📊 ${importedTotalQty.toLocaleString('zh-TW')} 件 / ${formatCurrency(importedTotalRev)}`,
+    ];
+    if (salesSkipped > 0) parts.push(`⚪ 略過 ${salesSkipped} 筆空白列`);
     setSalesMsg(`✅ 匯入完成｜${parts.join('　')}`);
 
     setSalesRows([]); setChannelRows([]); setStoreRows([]); setProductStoreRows([]);
@@ -4152,9 +4136,8 @@ function ImportPage() {
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <h3 className="mb-4 font-semibold">業績匯入</h3>
         <form onSubmit={previewSales}>
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="text-sm">{importWeekEnd ? `業績週別（週開始日）` : '業績日期（週末日）'}<input name="date" type="date" value={importDate} onChange={(ev) => setImportDate(ev.target.value)} className="mt-1 w-full rounded-md border px-3 py-2" />{importWeekEnd && <span className="mt-0.5 block text-xs text-slate-500">週結束：{importWeekEnd}</span>}</label>
-            <label className="text-sm md:col-span-2">Excel 檔案（週報格式從檔名自動偵測日期）<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
+          <div className="grid gap-3">
+            <label className="text-sm">Excel 檔案（日期從檔名自動解析，格式：20260525-0531業績明細表.xlsx）<input name="file" type="file" accept=".xlsx,.xls,.csv" className="mt-1 w-full rounded-md border px-3 py-2" required /></label>
           </div>
           <button className="mt-4 rounded-md bg-sun px-4 py-2 text-sm text-white">預覽業績資料</button>
           {salesMsg && <p className="mt-3 text-sm text-slate-600">{salesMsg}</p>}
