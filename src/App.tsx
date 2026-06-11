@@ -4652,7 +4652,7 @@ function parseSalesImport(workbook: any, utils: any, fallbackDate: string, weekL
   const headerIndex = rows.findIndex((r) => r.some((c) => String(c).trim() === '商品') && r.some((c) => String(c).trim() === '實售總金額'));
   const headers = headerIndex >= 0 ? rows[headerIndex].map((c) => String(c).trim()) : [];
   if (headers.includes('銷售總成本') && headers.some((h) => h.includes('毛利'))) {
-    const result = parseDepartmentSales(rows, fallbackDate, headerIndex);
+    const result = parseDepartmentSales(rows, fallbackDate, headerIndex, weekLabel);
     return { ...result, skipped: 0 };
   }
   return parseSales(workbook, utils, fallbackDate);
@@ -4661,9 +4661,8 @@ function parseSalesImport(workbook: any, utils: any, fallbackDate: string, weekL
 const STORE_HEADER_RE = /^(A\d{3}|E\d{3}|000\d{3})\s+/;
 const SKU_PREFIX_RE   = /^[A-Za-z]{2}\d/;
 
-function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIndex = -1) {
-  const periodText = headerIndex === 0 ? '' : String(rows[0]?.[1] || '');
-  const soldAt  = periodEndDate(periodText) || monthEnd(fallbackMonth);
+function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIndex = -1, weekLabel = '') {
+  const soldAt  = fallbackMonth;
   const dataStart = headerIndex >= 0 ? headerIndex + 1 : 3;
 
   // 格式自動偵測：第一筆非空列是否為 store header
@@ -4676,9 +4675,11 @@ function parseDepartmentSales(rows: unknown[][], fallbackMonth: string, headerIn
     return false;
   })();
 
-  return isStoreFirst
+  const result = isStoreFirst
     ? _parseStoreFirst(rows.slice(dataStart), soldAt)
     : _parseProductFirst(rows.slice(dataStart), soldAt, headerIndex === 0);
+  if (weekLabel) result.salesRows.forEach((r) => { r.week_label = weekLabel; });
+  return result;
 }
 
 /** 新格式（通路優先）：A### store section → 商品分類行（跳過）→ SKU 行 */
