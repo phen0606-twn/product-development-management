@@ -3858,19 +3858,30 @@ function ImportPage() {
     const file = form.get('file');
     if (!(file instanceof File)) return;
 
-    // ── 從檔名解析週別（必填，格式：20260525-0531業績明細表）──
-    const weekMatch = (file as File).name.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
-    if (!weekMatch) {
-      setSalesMsg('❌ 無法從檔名解析日期區間，請確認格式：20260525-0531業績明細表.xlsx');
+    // ── 從檔名解析週別（支援兩種格式）──
+    // 格式 A：20260401-20260430業績明細表.xlsx（結尾含完整年份）
+    // 格式 B：20260525-0531業績明細表.xlsx（結尾只有月日）
+    const name = (file as File).name;
+    const longMatch  = name.match(/(\d{4})(\d{2})(\d{2})-(\d{4})(\d{2})(\d{2})/);
+    const shortMatch = !longMatch ? name.match(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/) : null;
+    if (!longMatch && !shortMatch) {
+      setSalesMsg('❌ 無法從檔名解析日期區間，支援格式：20260401-20260430業績明細表.xlsx 或 20260525-0531業績明細表.xlsx');
       return;
     }
-    const [, year, startMonth, startDay, endMonth, endDay] = weekMatch;
-    const weekStart = `${year}-${startMonth}-${startDay}`;
-    const weekEnd = `${year}-${endMonth}-${endDay}`;
+    let weekStart: string, weekEnd: string;
+    if (longMatch) {
+      const [, y, sm, sd, ey, em, ed] = longMatch;
+      weekStart = `${y}-${sm}-${sd}`;
+      weekEnd   = `${ey}-${em}-${ed}`;
+    } else {
+      const [, y, sm, sd, em, ed] = shortMatch!;
+      weekStart = `${y}-${sm}-${sd}`;
+      weekEnd   = `${y}-${em}-${ed}`;
+    }
     const startD = new Date(weekStart + 'T00:00:00');
     const endD   = new Date(weekEnd   + 'T00:00:00');
     if (isNaN(startD.getTime()) || isNaN(endD.getTime()) || startD > endD) {
-      setSalesMsg(`❌ 從檔名解析出的日期無效（${weekStart} ～ ${weekEnd}），請確認格式：20260525-0531業績明細表.xlsx`);
+      setSalesMsg(`❌ 從檔名解析出的日期無效（${weekStart} ～ ${weekEnd}），請確認格式：20260401-20260430業績明細表.xlsx`);
       return;
     }
     const fmtL = (ds: string) => { const m = ds.match(/-(\d+)-(\d+)$/); return m ? `${+m[1]}/${+m[2]}` : ds; };
