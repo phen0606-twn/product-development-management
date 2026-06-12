@@ -207,23 +207,71 @@ function PasswordReset({ onDone }: { onDone: () => void }) {
 }
 
 function Login() {
+  const MAX_ATTEMPTS = 5;
+  const LOCK_MINUTES = 15;
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [sendingLink, setSendingLink] = useState(false);
   const [message, setMessage] = useState('');
+  const [failCount, setFailCount] = useState(() => {
+    const until = parseInt(localStorage.getItem('login_locked_until') || '0');
+    return until > Date.now() ? parseInt(localStorage.getItem('login_fail_count') || '0') : 0;
+  });
+  const [lockedUntil, setLockedUntil] = useState(() => {
+    const until = parseInt(localStorage.getItem('login_locked_until') || '0');
+    return until > Date.now() ? until : 0;
+  });
+  const [, setTick] = useState(0);
+
+  // 每秒更新倒數
+  useEffect(() => {
+    if (!lockedUntil) return;
+    const id = setInterval(() => {
+      if (Date.now() >= lockedUntil) {
+        clearInterval(id);
+        setLockedUntil(0);
+        setFailCount(0);
+        localStorage.removeItem('login_locked_until');
+        localStorage.removeItem('login_fail_count');
+      }
+      setTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
+
+  const isLocked = lockedUntil > 0 && Date.now() < lockedUntil;
+  const lockSecsLeft = isLocked ? Math.ceil((lockedUntil - Date.now()) / 1000) : 0;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setMessage('');
+    if (isLocked) {
+      const m = Math.floor(lockSecsLeft / 60), s = lockSecsLeft % 60;
+      setMessage(`帳號已暫時鎖定，請等待 ${m > 0 ? `${m} 分 ` : ''}${s} 秒後再試。`);
+      return;
+    }
     const { error } = await supabase!.auth.signInWithPassword({ email, password });
-    setMessage(error ? `登入失敗：${error.message}` : '登入成功。');
+    if (!error) {
+      localStorage.removeItem('login_fail_count');
+      localStorage.removeItem('login_locked_until');
+      return;
+    }
+    const next = failCount + 1;
+    setFailCount(next);
+    localStorage.setItem('login_fail_count', String(next));
+    if (next >= MAX_ATTEMPTS) {
+      const until = Date.now() + LOCK_MINUTES * 60 * 1000;
+      setLockedUntil(until);
+      localStorage.setItem('login_locked_until', String(until));
+      setMessage(`密碼錯誤已達 ${MAX_ATTEMPTS} 次，帳號鎖定 ${LOCK_MINUTES} 分鐘。`);
+    } else {
+      setMessage(`登入失敗：密碼錯誤（第 ${next} 次，超過 ${MAX_ATTEMPTS} 次將鎖定 ${LOCK_MINUTES} 分鐘）`);
+    }
   }
 
   async function sendMagicLink() {
-    if (!email) {
-      setMessage('請先輸入 Email。');
-      return;
-    }
+    if (!email) { setMessage('請先輸入 Email。'); return; }
     setSendingLink(true);
     const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
     setMessage(error ? `寄送失敗：${error.message}` : '登入連結已寄出，請到信箱收信。');
@@ -235,13 +283,21 @@ function Login() {
       <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-soft">
         <h1 className="text-2xl font-semibold">商品開發管理系統</h1>
         <p className="mt-2 text-sm text-slate-500">請使用已授權的 Email 與密碼登入。</p>
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="mt-5 w-full rounded-md border border-slate-200 px-3 py-2" required />
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="密碼" className="mt-3 w-full rounded-md border border-slate-200 px-3 py-2" required />
-        <button className="mt-4 w-full rounded-md bg-sun px-4 py-2 text-white">登入</button>
-        <button type="button" onClick={sendMagicLink} disabled={sendingLink} className="mt-3 w-full rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-600 disabled:opacity-50">
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="mt-5 w-full rounded-md border border-slate-200 px-3 py-2" required disabled={isLocked} />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="密碼" className="mt-3 w-full rounded-md border border-slate-200 px-3 py-2" required disabled={isLocked} />
+        {isLocked
+          ? <div className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
+              🔒 帳號已鎖定，請等待 {Math.floor(lockSecsLeft / 60)} 分 {lockSecsLeft % 60} 秒
+            </div>
+          : <button className="mt-4 w-full rounded-md bg-sun px-4 py-2 text-white" disabled={isLocked}>登入</button>
+        }
+        <button type="button" onClick={sendMagicLink} disabled={sendingLink || isLocked} className="mt-3 w-full rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-600 disabled:opacity-50">
           {sendingLink ? '寄送中...' : '改用 Email 登入連結'}
         </button>
-        {message && <p className="mt-4 text-sm text-slate-600">{message}</p>}
+        {message && <p className={`mt-4 text-sm ${message.includes('失敗') || message.includes('鎖定') ? 'text-red-600' : 'text-slate-600'}`}>{message}</p>}
+        {!isLocked && failCount > 0 && failCount < MAX_ATTEMPTS &&
+          <p className="mt-2 text-xs text-amber-600">還剩 {MAX_ATTEMPTS - failCount} 次機會</p>
+        }
       </form>
     </main>
   );
