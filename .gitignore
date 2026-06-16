@@ -11,3 +11,7 @@ dist *
 package-lock *.json
 .vite
 cluade/
+
+# 本機備份
+backup/
+.env.local

@@ -4684,6 +4684,9 @@ function isWeeklySkipSheet(name: string) {
 function parseWeeklySales(workbook: any, utils: any, weekStart: string, weekLabel = '') {
   let skipped = 0;
   const salesRows: Row[] = [];
+  const storeTotals = new Map<string, Row>();
+  const productStoreRows: Row[] = [];
+
   for (const sheetName of workbook.SheetNames as string[]) {
     if (isWeeklySkipSheet(sheetName)) continue;
     const rows = utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false }) as unknown[][];
@@ -4711,6 +4714,7 @@ function parseWeeklySales(workbook: any, utils: any, weekStart: string, weekLabe
       const storeCode   = String(r[ci]  ?? '').trim();
       const storeName   = String(r[sni] ?? '').trim();
       const fullStore   = String(r[fsi] ?? '').trim() || `${storeCode} ${storeName}`.trim();
+      const channel     = classifyStore(fullStore || storeCode);
       salesRows.push({
         product_id: null,
         external_sku: sku,
@@ -4718,13 +4722,34 @@ function parseWeeklySales(workbook: any, utils: any, weekStart: string, weekLabe
         sold_at: weekStart,
         quantity: qty,
         revenue,
-        channel: classifyStore(fullStore || storeCode),
+        channel,
         notes: fullStore || storeCode || null,
         week_label: weekLabel || null,
       });
+
+      // 累計門市彙總（→ channel_store_sales_records）
+      const storeKey = `${channel}::${fullStore || storeCode}`;
+      const storeRow = storeTotals.get(storeKey) ?? { sales_month: weekStart, channel_category: channel, store_name: fullStore || storeCode, quantity: 0, revenue: 0 };
+      storeRow.quantity = Number(storeRow.quantity) + qty;
+      storeRow.revenue  = Number(storeRow.revenue)  + revenue;
+      storeTotals.set(storeKey, storeRow);
+
+      // SKU × 門市明細（→ product_store_sales）
+      productStoreRows.push({ sales_month: weekStart, external_sku: sku, external_product_name: productName, channel_category: channel, store_name: fullStore || storeCode, quantity: qty, revenue });
     }
   }
-  return { salesRows, channelRows: [], storeRows: [], productStoreRows: [], skipped };
+
+  // 通路彙總（→ channel_sales_records）
+  const storeRows = [...storeTotals.values()];
+  const channelRows = Object.values(storeRows.reduce((acc, row) => {
+    const key = String(row.channel_category);
+    acc[key] ??= { sales_month: weekStart, channel_category: key, quantity: 0, revenue: 0 };
+    acc[key].quantity = Number(acc[key].quantity) + Number(row.quantity ?? 0);
+    acc[key].revenue  = Number(acc[key].revenue)  + Number(row.revenue  ?? 0);
+    return acc;
+  }, {} as Record<string, Row>));
+
+  return { salesRows, channelRows, storeRows, productStoreRows, skipped };
 }
 
 function parseSalesImport(workbook: any, utils: any, fallbackDate: string, weekLabel = '') {
