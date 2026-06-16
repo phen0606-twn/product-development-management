@@ -857,7 +857,7 @@ function ProductsPage() {
                 </td>
                 <td className="p-3">{categoryLabel(row.category)}</td>
                 <td className="p-3">
-                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium bg-[#572A87] text-white">
+                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={statusBadgeStyle(row.status)}>
                     {statusText(row.status)}
                   </span>
                 </td>
@@ -884,8 +884,6 @@ function ProductsPage() {
           {displayNonActive.map((row) => {
             const uc = unitCostByProduct.get(row.id);
             const isPaused = row.status === 'paused';
-            const badgeBg = isPaused ? '#C07A2E' : '#E5E5E5';
-            const badgeColor = isPaused ? '#ffffff' : '#999999';
             return (
               <tr key={row.id} className="border-t align-top" style={{ backgroundColor: '#F5F5F5' }}>
                 <td className="p-3" style={{ color: '#999999' }}>{row.sku}</td>
@@ -904,7 +902,7 @@ function ProductsPage() {
                 </td>
                 <td className="p-3" style={{ color: '#999999' }}>{categoryLabel(row.category)}</td>
                 <td className="p-3">
-                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: badgeBg, color: badgeColor }}>
+                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={statusBadgeStyle(row.status)}>
                     {statusText(row.status)}
                   </span>
                 </td>
@@ -4531,6 +4529,20 @@ function ChannelSummary({ rows }: { rows: Array<{ label: string; quantity: numbe
 
 function statusText(value: string) {
   return statusOptions.find(([v]) => v === value)?.[1] ?? value ?? '-';
+}
+
+function statusBadgeStyle(status: string): { backgroundColor: string; color: string } {
+  const map: Record<string, { backgroundColor: string; color: string }> = {
+    planning:        { backgroundColor: '#E8EAF0', color: '#4A5280' },
+    quoting:         { backgroundColor: '#FEF3C7', color: '#7D5A00' },
+    in_development:  { backgroundColor: '#572A87', color: '#FFFFFF' },
+    mass_production: { backgroundColor: '#1A56DB', color: '#FFFFFF' },
+    delayed:         { backgroundColor: '#E53E3E', color: '#FFFFFF' },
+    paused:          { backgroundColor: '#DD6B20', color: '#FFFFFF' },
+    launched:        { backgroundColor: '#276749', color: '#FFFFFF' },
+    completed:       { backgroundColor: '#E5E5E5', color: '#888888' },
+  };
+  return map[status] ?? { backgroundColor: '#E5E5E5', color: '#666666' };
 }
 
 function groupProductsByStatus(products: Row[]) {
