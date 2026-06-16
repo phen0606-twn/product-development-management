@@ -2410,8 +2410,10 @@ function ChannelAnalysisPage() {
     if (trendMonthRows.length > 0) {
       return CHANNELS
         .map((ch) => {
-          const row = trendMonthRows.find((r) => r.channel_category === ch);
-          return { label: ch, quantity: row ? Number(row.quantity) : 0, revenue: row ? Number(row.revenue) : 0 };
+          const rows = trendMonthRows.filter((r) => r.channel_category === ch);
+          const quantity = rows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
+          const revenue  = rows.reduce((s, r) => s + Number(r.revenue  ?? 0), 0);
+          return { label: ch, quantity, revenue };
         })
         .filter((c) => c.revenue > 0 || c.quantity > 0);
     }
@@ -2446,8 +2448,9 @@ function ChannelAnalysisPage() {
       const mRows = channelTrendRows.filter((r) => String(r.sales_month || '').startsWith(month));
       const point: Record<string, string | number> = { month: month.replace('-', '/') };
       for (const ch of CHANNELS) {
-        const row = mRows.find((r) => r.channel_category === ch);
-        point[ch] = row ? Math.round(Number(row.revenue)) : 0;
+        const total = mRows.filter((r) => r.channel_category === ch)
+          .reduce((sum, r) => sum + Number(r.revenue ?? 0), 0);
+        point[ch] = Math.round(total);
       }
       return point;
     });
