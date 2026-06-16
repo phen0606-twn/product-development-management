@@ -857,7 +857,7 @@ function ProductsPage() {
                 </td>
                 <td className="p-3">{categoryLabel(row.category)}</td>
                 <td className="p-3">
-                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={statusBadgeStyle(row.status)}>
+                  <span className="inline-flex whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium" style={statusBadgeStyle(row.status)}>
                     {statusText(row.status)}
                   </span>
                 </td>
@@ -902,7 +902,7 @@ function ProductsPage() {
                 </td>
                 <td className="p-3" style={{ color: '#999999' }}>{categoryLabel(row.category)}</td>
                 <td className="p-3">
-                  <span className="inline-flex whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium" style={statusBadgeStyle(row.status)}>
+                  <span className="inline-flex whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium" style={statusBadgeStyle(row.status)}>
                     {statusText(row.status)}
                   </span>
                 </td>
@@ -4533,14 +4533,14 @@ function statusText(value: string) {
 
 function statusBadgeStyle(status: string): { backgroundColor: string; color: string } {
   const map: Record<string, { backgroundColor: string; color: string }> = {
-    planning:        { backgroundColor: '#E8EAF0', color: '#4A5280' },
-    quoting:         { backgroundColor: '#FEF3C7', color: '#7D5A00' },
+    planning:        { backgroundColor: '#C5AAE1', color: '#572A87' },
+    quoting:         { backgroundColor: '#C5AAE1', color: '#572A87' },
     in_development:  { backgroundColor: '#572A87', color: '#FFFFFF' },
-    mass_production: { backgroundColor: '#1A56DB', color: '#FFFFFF' },
-    delayed:         { backgroundColor: '#E53E3E', color: '#FFFFFF' },
-    paused:          { backgroundColor: '#DD6B20', color: '#FFFFFF' },
-    launched:        { backgroundColor: '#276749', color: '#FFFFFF' },
-    completed:       { backgroundColor: '#E5E5E5', color: '#888888' },
+    mass_production: { backgroundColor: '#984696', color: '#FFFFFF' },
+    delayed:         { backgroundColor: '#FF4444', color: '#FFFFFF' },
+    paused:          { backgroundColor: '#999999', color: '#FFFFFF' },
+    launched:        { backgroundColor: '#86B926', color: '#FFFFFF' },
+    completed:       { backgroundColor: '#F5F5F5', color: '#999999' },
   };
   return map[status] ?? { backgroundColor: '#E5E5E5', color: '#666666' };
 }
