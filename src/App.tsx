@@ -5276,6 +5276,7 @@ function AllocationPage() {
   const [stores, setStores] = useState<AllocStore[]>([]);
   const [calculated, setCalculated] = useState(false);
   const [filterGroup, setFilterGroup] = useState<string>('ALL');
+  const [debugInfo, setDebugInfo] = useState('');
 
   const { rows: products } = useRows('products', 'created_at');
 
@@ -5288,13 +5289,23 @@ function AllocationPage() {
     const startDate = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
     const startStr = startDate.toISOString().slice(0, 10);
 
-    const { data } = await supabase
+    const { data, error: qErr } = await supabase
       .from('product_store_sales')
       .select('store_name,channel_category,revenue')
       .gte('sales_month', startStr)
       .limit(50000);
 
-    if (!data || data.length === 0) { setLoading(false); setStores([]); setCalculated(true); return; }
+    if (qErr) {
+      setDebugInfo(`查詢錯誤：${qErr.message}`);
+      setLoading(false); setStores([]); setCalculated(true); return;
+    }
+    if (!data || data.length === 0) {
+      setDebugInfo(`查詢期間：${startStr} 以後，共 0 筆原始資料`);
+      setLoading(false); setStores([]); setCalculated(true); return;
+    }
+
+    const uniqueNames = [...new Set(data.map(r => String(r.store_name || '')))].slice(0, 10);
+    setDebugInfo(`原始 ${data.length} 筆，門市名稱範例：${uniqueNames.join('、')}`);
 
     // keep only physical stores: must start with 'A' and not be an online/warehouse channel
     const NON_STORE = /蝦皮|momo|團購|大紅哥|官網|平台|網路|電商|倉庫|總倉|行銷|公關/i;
@@ -5461,7 +5472,10 @@ function AllocationPage() {
 
       {/* 結果 */}
       {calculated && stores.length === 0 && (
-        <p className="text-sm text-slate-400">所選期間內無門市銷售記錄。</p>
+        <div>
+          <p className="text-sm text-slate-400">所選期間內無門市銷售記錄。</p>
+          {debugInfo && <p className="mt-1 text-xs text-slate-400 font-mono">{debugInfo}</p>}
+        </div>
       )}
       {calculated && stores.length > 0 && (
         <>
