@@ -5289,9 +5289,10 @@ function AllocationPage() {
     const startStr = startDate.toISOString().slice(0, 10);
 
     const { data } = await supabase
-      .from('channel_store_sales_records')
+      .from('product_store_sales')
       .select('store_name,channel_category,revenue')
-      .gte('sales_month', startStr);
+      .gte('sales_month', startStr)
+      .limit(50000);
 
     if (!data || data.length === 0) { setLoading(false); setStores([]); setCalculated(true); return; }
 
