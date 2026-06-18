@@ -5295,9 +5295,9 @@ function AllocationPage() {
 
     if (!data || data.length === 0) { setLoading(false); setStores([]); setCalculated(true); return; }
 
-    // aggregate by store
+    // aggregate by store — only keep stores starting with 'A' (others are warehouse codes)
     const map = new Map<string, { channel_category: string; revenue: number }>();
-    for (const r of data) {
+    for (const r of data.filter(r => /^A/i.test(String(r.store_name || '')))) {
       const name = String(r.store_name || '未知');
       const existing = map.get(name);
       if (existing) {
