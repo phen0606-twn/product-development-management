@@ -5277,7 +5277,7 @@ function AllocationPage() {
   const [calculated, setCalculated] = useState(false);
   const [filterGroup, setFilterGroup] = useState<string>('ALL');
 
-  const products = useRows('products', 'created_at');
+  const { rows: products } = useRows('products', 'created_at');
 
   async function calculate() {
     if (!supabase) return;
