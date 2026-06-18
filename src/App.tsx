@@ -1,7 +1,7 @@
 import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
-import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { BarChart3, Boxes, DollarSign, LayoutDashboard, LayoutGrid, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
@@ -33,6 +33,7 @@ const nav = [
   ['/inventory', '庫存追蹤', Package, false],
   ['/import', '資料匯入', Upload, true],
   ['/customs', '報關試算', Ship, false],
+  ['/allocation', '分貨計算', LayoutGrid, false],
 ] as const;
 
 // Routes marked adminOnly=true are hidden from viewer role
@@ -163,6 +164,7 @@ export default function App() {
           <Route path="/sales-import" element={<Navigate to="/import" replace />} />
           <Route path="/inventory-import" element={<Navigate to="/import" replace />} />
           <Route path="/customs" element={<ErrorBoundary><CustomsCalculationsPage /></ErrorBoundary>} />
+          <Route path="/allocation" element={<ErrorBoundary><AllocationPage /></ErrorBoundary>} />
         </Routes>
       </main>
     </div>
@@ -5248,6 +5250,305 @@ function CustomsCalculationsPage() {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 分貨計算 ────────────────────────────────────────────────────────────────
+
+type AllocStore = {
+  store_name: string;
+  channel_category: string;
+  revenue: number;
+  rank: number;
+  pct: number;
+  group: 'A' | 'B' | 'C' | 'D';
+  qty: number;
+};
+
+function AllocationPage() {
+  const [period, setPeriod] = useState<'1' | '3' | '6'>('3');
+  const [thresholds, setThresholds] = useState({ a: 25, b: 50, c: 75 });
+  const [groupQty, setGroupQty] = useState({ A: '5', B: '3', C: '2', D: '1' });
+  const [productLabel, setProductLabel] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [stores, setStores] = useState<AllocStore[]>([]);
+  const [calculated, setCalculated] = useState(false);
+  const [filterGroup, setFilterGroup] = useState<string>('ALL');
+
+  const products = useRows('products', 'created_at');
+
+  async function calculate() {
+    if (!supabase) return;
+    setLoading(true);
+    setCalculated(false);
+    const months = parseInt(period);
+    const now = new Date();
+    const startDate = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+    const startStr = startDate.toISOString().slice(0, 10);
+
+    const { data } = await supabase
+      .from('channel_sales_records')
+      .select('store_name,channel_category,revenue')
+      .gte('sales_month', startStr);
+
+    if (!data || data.length === 0) { setLoading(false); setStores([]); setCalculated(true); return; }
+
+    // aggregate by store
+    const map = new Map<string, { channel_category: string; revenue: number }>();
+    for (const r of data) {
+      const name = String(r.store_name || '未知');
+      const existing = map.get(name);
+      if (existing) {
+        existing.revenue += Number(r.revenue) || 0;
+      } else {
+        map.set(name, { channel_category: String(r.channel_category || ''), revenue: Number(r.revenue) || 0 });
+      }
+    }
+
+    // sort by revenue desc
+    const sorted = [...map.entries()]
+      .map(([store_name, v]) => ({ store_name, ...v }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    const total = sorted.length;
+    const result: AllocStore[] = sorted.map((s, i) => {
+      const rank = i + 1;
+      const pct = (rank / total) * 100;
+      const group: 'A' | 'B' | 'C' | 'D' =
+        pct <= thresholds.a ? 'A' :
+        pct <= thresholds.b ? 'B' :
+        pct <= thresholds.c ? 'C' : 'D';
+      const qty = parseInt(groupQty[group]) || 0;
+      return { store_name: s.store_name, channel_category: s.channel_category, revenue: s.revenue, rank, pct, group, qty };
+    });
+
+    setStores(result);
+    setLoading(false);
+    setCalculated(true);
+  }
+
+  function exportExcel() {
+    if (stores.length === 0) return;
+    // dynamic import xlsx
+    import('xlsx').then((XLSX) => {
+      const periodLabel = period === '1' ? '近1個月' : period === '3' ? '近3個月' : '近6個月';
+      const title = productLabel ? `${productLabel} 分貨表（${periodLabel}）` : `分貨表（${periodLabel}）`;
+
+      const headers = ['門市名稱', '通路', `業績（${periodLabel}）`, '排名', '組別', '分配數量（件）'];
+      const rows = stores.map(s => [
+        s.store_name,
+        s.channel_category,
+        s.revenue,
+        s.rank,
+        s.group,
+        s.qty,
+      ]);
+      const totalQty = stores.reduce((sum, s) => sum + s.qty, 0);
+      rows.push(['合計', '', stores.reduce((sum, s) => sum + s.revenue, 0), '', '', totalQty]);
+
+      const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rows]);
+      // merge title row
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
+      ws['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 8 }, { wch: 8 }, { wch: 16 }];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '分貨表');
+      const filename = `分貨表_${productLabel || '新品'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      XLSX.writeFile(wb, filename);
+    });
+  }
+
+  const gQty = (g: 'A' | 'B' | 'C' | 'D') => parseInt(groupQty[g]) || 0;
+  const groupStats = (['A', 'B', 'C', 'D'] as const).map(g => ({
+    group: g,
+    count: stores.filter(s => s.group === g).length,
+    totalQty: stores.filter(s => s.group === g).reduce((sum, s) => sum + s.qty, 0),
+  }));
+  const totalStores = stores.length;
+  const totalQty = stores.reduce((sum, s) => sum + s.qty, 0);
+  const displayed = filterGroup === 'ALL' ? stores : stores.filter(s => s.group === filterGroup);
+
+  const groupColor: Record<string, string> = {
+    A: '#572A87', B: '#984696', C: '#86B926', D: '#9DD0E0',
+  };
+  const groupBg: Record<string, string> = {
+    A: '#EDE5F5', B: '#F3E5F3', C: '#EEF5DC', D: '#E5F4F8',
+  };
+
+  return (
+    <div className="space-y-6 p-6">
+      <h1 className="text-xl font-bold text-ink">分貨計算</h1>
+
+      {/* 設定區 */}
+      <section className="rounded-xl bg-white p-5 shadow-sm border border-slate-100">
+        <h2 className="mb-4 font-semibold text-ink">計算設定</h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* 商品 */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">商品（選填）</label>
+            <select className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:border-[#572A87] focus:outline-none"
+              value={productLabel} onChange={e => setProductLabel(e.target.value)}>
+              <option value="">— 不指定 —</option>
+              {products.map(p => (
+                <option key={p.id} value={String(p.product_name || p.id)}>{String(p.product_name || p.id)}</option>
+              ))}
+            </select>
+          </div>
+          {/* 期間 */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">業績統計期間</label>
+            <div className="flex gap-1.5">
+              {([['1','近1個月'],['3','近3個月'],['6','近6個月']] as [string,string][]).map(([v, label]) => (
+                <button key={v} type="button" onClick={() => setPeriod(v as '1'|'3'|'6')}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${period === v ? 'bg-[#572A87] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* ABCD 門檻 */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">分組門檻（前 X% 進入該組）</label>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(['a','b','c'] as const).map((k, i) => (
+                <div key={k} className="flex items-center gap-1">
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold text-white"
+                    style={{ backgroundColor: groupColor[['A','B','C'][i]] }}>
+                    {['A','B','C'][i]}
+                  </span>
+                  <input type="number" min="1" max="99" className="w-14 rounded border border-slate-200 px-1.5 py-1 text-xs focus:border-[#572A87] focus:outline-none"
+                    value={thresholds[k]}
+                    onChange={e => setThresholds(t => ({ ...t, [k]: parseInt(e.target.value) || t[k] }))} />
+                  <span className="text-xs text-slate-400">%</span>
+                </div>
+              ))}
+              <div className="flex items-center gap-1">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold" style={{ backgroundColor: groupColor.D, color: '#1a1229' }}>D</span>
+                <span className="text-xs text-slate-400">其餘</span>
+              </div>
+            </div>
+          </div>
+          {/* 各組件數 */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-500">各組分配件數</label>
+            <div className="flex items-center gap-2 flex-wrap">
+              {(['A','B','C','D'] as const).map(g => (
+                <div key={g} className="flex items-center gap-1">
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold text-white"
+                    style={{ backgroundColor: groupColor[g], color: g === 'D' ? '#1a1229' : '#fff' }}>
+                    {g}
+                  </span>
+                  <input type="number" min="0" className="w-14 rounded border border-slate-200 px-1.5 py-1 text-xs focus:border-[#572A87] focus:outline-none"
+                    value={groupQty[g]}
+                    onChange={e => setGroupQty(q => ({ ...q, [g]: e.target.value }))} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button onClick={calculate} disabled={loading}
+            className="rounded-md bg-[#572A87] px-5 py-2 text-sm text-white hover:opacity-90 disabled:opacity-50">
+            {loading ? '計算中…' : '開始計算'}
+          </button>
+        </div>
+      </section>
+
+      {/* 結果 */}
+      {calculated && stores.length === 0 && (
+        <p className="text-sm text-slate-400">所選期間內無門市銷售記錄。</p>
+      )}
+      {calculated && stores.length > 0 && (
+        <>
+          {/* 摘要卡片 */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {groupStats.map(gs => (
+              <div key={gs.group} className="rounded-xl p-4 text-center" style={{ backgroundColor: groupBg[gs.group] }}>
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold text-white mb-1"
+                  style={{ backgroundColor: groupColor[gs.group], color: gs.group === 'D' ? '#1a1229' : '#fff' }}>
+                  {gs.group}
+                </span>
+                <p className="text-lg font-bold text-ink">{gs.count} 家</p>
+                <p className="text-xs text-slate-500">{gs.totalQty} 件</p>
+                <p className="text-xs text-slate-400">{gQty(gs.group)} 件/家</p>
+              </div>
+            ))}
+            <div className="rounded-xl bg-slate-50 p-4 text-center border border-slate-200">
+              <p className="text-xs text-slate-400 mb-1">合計</p>
+              <p className="text-lg font-bold text-ink">{totalStores} 家</p>
+              <p className="text-xs text-slate-500">{totalQty.toLocaleString()} 件</p>
+            </div>
+          </div>
+
+          {/* 表格工具列 */}
+          <section className="rounded-xl bg-white shadow-sm border border-slate-100 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 flex-wrap gap-2">
+              <div className="flex gap-1.5">
+                <button onClick={() => setFilterGroup('ALL')}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${filterGroup === 'ALL' ? 'bg-[#572A87] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  全部 ({totalStores})
+                </button>
+                {groupStats.map(gs => (
+                  <button key={gs.group} onClick={() => setFilterGroup(gs.group)}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${filterGroup === gs.group ? 'text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                    style={filterGroup === gs.group ? { backgroundColor: groupColor[gs.group] } : {}}>
+                    {gs.group} 組 ({gs.count})
+                  </button>
+                ))}
+              </div>
+              <button onClick={exportExcel}
+                className="flex items-center gap-1.5 rounded-md bg-[#86B926] px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90">
+                ↓ 匯出 Excel
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-500">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left font-medium">排名</th>
+                    <th className="px-4 py-2.5 text-left font-medium">門市名稱</th>
+                    <th className="px-4 py-2.5 text-left font-medium">通路</th>
+                    <th className="px-4 py-2.5 text-right font-medium">業績</th>
+                    <th className="px-4 py-2.5 text-center font-medium">組別</th>
+                    <th className="px-4 py-2.5 text-right font-medium">分配件數</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {displayed.map(s => (
+                    <tr key={s.store_name} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="px-4 py-2.5 text-slate-400 text-xs">{s.rank}</td>
+                      <td className="px-4 py-2.5 font-medium text-ink">{s.store_name}</td>
+                      <td className="px-4 py-2.5 text-slate-500">{s.channel_category}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{formatCurrency(s.revenue)}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold text-white"
+                          style={{ backgroundColor: groupColor[s.group], color: s.group === 'D' ? '#1a1229' : '#fff' }}>
+                          {s.group}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-semibold tabular-nums">{s.qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-slate-50 text-xs font-semibold">
+                  <tr>
+                    <td colSpan={3} className="px-4 py-2.5 text-slate-500">合計</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {formatCurrency(displayed.reduce((s, r) => s + r.revenue, 0))}
+                    </td>
+                    <td />
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {displayed.reduce((s, r) => s + r.qty, 0)} 件
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </section>
+        </>
       )}
     </div>
   );
