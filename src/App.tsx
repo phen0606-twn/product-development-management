@@ -5289,7 +5289,7 @@ function AllocationPage() {
     const startStr = startDate.toISOString().slice(0, 10);
 
     const { data } = await supabase
-      .from('channel_sales_records')
+      .from('channel_store_sales_records')
       .select('store_name,channel_category,revenue')
       .gte('sales_month', startStr);
 
