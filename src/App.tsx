@@ -5296,7 +5296,7 @@ function AllocationPage() {
     if (!data || data.length === 0) { setLoading(false); setStores([]); setCalculated(true); return; }
 
     // keep only physical stores: must start with 'A' and not be an online/warehouse channel
-    const NON_STORE = /蝦皮|momo|團購|大紅哥|官網|平台|網路|電商|倉庫|總倉/i;
+    const NON_STORE = /蝦皮|momo|團購|大紅哥|官網|平台|網路|電商|倉庫|總倉|行銷|公關/i;
     const isStore = (name: string) => /^A/i.test(name) && !NON_STORE.test(name);
     const map = new Map<string, { channel_category: string; revenue: number }>();
     for (const r of data.filter(r => isStore(String(r.store_name || '')))) {
