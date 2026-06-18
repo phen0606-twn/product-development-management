@@ -1,7 +1,7 @@
 import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link, NavLink, Navigate, Route, Routes, useParams } from 'react-router-dom';
-import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { Link, NavLink, Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
+import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
@@ -32,6 +32,7 @@ const nav = [
   ['/channel-analysis', '通路分析', TrendingUp, false],
   ['/inventory', '庫存追蹤', Package, false],
   ['/import', '資料匯入', Upload, true],
+  ['/customs', '報關試算', Ship, false],
 ] as const;
 
 // Routes marked adminOnly=true are hidden from viewer role
@@ -161,6 +162,7 @@ export default function App() {
           <Route path="/import" element={<Guard><ErrorBoundary><ImportPage /></ErrorBoundary></Guard>} />
           <Route path="/sales-import" element={<Navigate to="/import" replace />} />
           <Route path="/inventory-import" element={<Navigate to="/import" replace />} />
+          <Route path="/customs" element={<ErrorBoundary><CustomsCalculationsPage /></ErrorBoundary>} />
         </Routes>
       </main>
     </div>
@@ -1398,6 +1400,8 @@ function ProductDetailPage() {
           </div>
         )}
       </section>
+
+      <CustomsCalcLink productId={id ?? ''} />
 
       <section>
         <Toolbar onAdd={() => { setEditing(null); setOpen(true); }} label="新增進度" />
@@ -4525,6 +4529,435 @@ function ChannelSummary({ rows }: { rows: Array<{ label: string; quantity: numbe
   let cursor = 0;
   const gradient = rows.map((r, i) => { const start = cursor; cursor += total ? r.revenue / total * 100 : 0; return `${getColor(r.label, i)} ${start}% ${cursor}%`; }).join(', ') || '#e2e8f0 0 100%';
   return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><h3 className="mb-4 font-semibold">通路業績</h3><div className="space-y-3">{rows.map((r, i) => <div key={r.label} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"><p><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}<span className="ml-2 text-slate-500">{total ? (r.revenue / total * 100).toFixed(1) : 0}%</span></p><p className="font-semibold text-leaf">{formatCurrency(r.revenue)}</p></div>)}<div className="grid gap-5 border-t pt-5 md:grid-cols-[260px_1fr] md:items-center"><div className="mx-auto grid h-60 w-60 place-items-center rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-sm"><p className="text-center text-sm font-semibold">{formatCurrency(total)}</p></div></div><div>{rows.map((r, i) => <p key={r.label} className="mb-2 text-sm"><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}</p>)}</div></div></div></section>;
+}
+
+// ── 報關試算頁：商品詳情連結 ────────────────────────────────────────────
+function CustomsCalcLink({ productId }: { productId: string }) {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!supabase || !productId) return;
+    supabase.from('customs_calculations')
+      .select('id', { count: 'exact', head: true })
+      .eq('product_id', productId)
+      .then(({ count: c }) => setCount(c ?? 0));
+  }, [productId]);
+  if (count === null) return null;
+  return (
+    <div className="rounded-lg border border-[#C5AAE1] bg-[#C5AAE1]/15 px-5 py-3 flex items-center justify-between">
+      <div className="flex items-center gap-2 text-sm text-[#572A87]">
+        <Ship className="h-4 w-4" />
+        <span>報關試算記錄</span>
+        <span className="rounded-full bg-[#572A87] px-2 py-0.5 text-xs text-white">{count}</span>
+      </div>
+      <Link to={`/customs?product_id=${productId}`}
+        className="text-xs font-medium text-[#572A87] hover:underline">
+        {count > 0 ? `查看 ${count} 筆試算 →` : '新增報關試算 →'}
+      </Link>
+    </div>
+  );
+}
+
+// ── 報關試算頁 ────────────────────────────────────────────────────────────
+function CustomsCalculationsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterProductId = searchParams.get('product_id') ?? '';
+
+  const [records, setRecords] = useState<Row[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Row | null>(null);
+  const [products, setProducts] = useState<Row[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const defaultRate = localStorage.getItem('customs_last_rate') || '32.5';
+  const EMPTY: Record<string, string> = {
+    calc_name: '', product_id: filterProductId,
+    calc_mode: 'estimate', transport_type: 'sea',
+    quantity: '1', unit_price_usd: '', exchange_rate_usd: defaultRate,
+    freight_usd: '0', insurance_usd: '0', customs_broker_fee_twd: '0',
+    hs_code: '', tariff_rate: '0', business_tax_rate: '5', notes: '',
+  };
+  const [form, setForm] = useState<Record<string, string>>(EMPTY);
+
+  async function reload() {
+    if (!supabase) return;
+    const { data } = await supabase.from('customs_calculations')
+      .select('*, products(id,name,sku)').order('created_at', { ascending: false });
+    setRecords(data ?? []);
+  }
+
+  useEffect(() => {
+    if (!supabase) return;
+    Promise.all([
+      supabase.from('customs_calculations').select('*, products(id,name,sku)').order('created_at', { ascending: false }),
+      supabase.from('products').select('id,name,sku').order('name'),
+    ]).then(([{ data: calcs }, { data: prods }]) => {
+      setRecords(calcs ?? []);
+      setProducts(prods ?? []);
+      setLoadingData(false);
+    });
+  }, []);
+
+  const n = (k: string) => parseFloat(form[k]) || 0;
+  const qty = n('quantity');
+  const cifTwd = (n('unit_price_usd') * qty + n('freight_usd') + n('insurance_usd')) * n('exchange_rate_usd');
+  const tariff = cifTwd * (n('tariff_rate') / 100);
+  const bizTax = (cifTwd + tariff) * (n('business_tax_rate') / 100);
+  const totalTwd = cifTwd + tariff + bizTax + n('customs_broker_fee_twd');
+  const unitTwd = qty > 0 ? totalTwd / qty : 0;
+
+  const field = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.value }));
+
+  function rowToForm(row: Row): Record<string, string> {
+    return {
+      calc_name: row.calc_name ?? '',
+      product_id: row.product_id ?? '',
+      calc_mode: row.calc_mode ?? 'estimate',
+      transport_type: row.transport_type ?? 'sea',
+      quantity: String(row.quantity ?? 1),
+      unit_price_usd: String(row.unit_price_usd ?? ''),
+      exchange_rate_usd: String(row.exchange_rate_usd ?? 32.5),
+      freight_usd: String(row.freight_usd ?? 0),
+      insurance_usd: String(row.insurance_usd ?? 0),
+      customs_broker_fee_twd: String(row.customs_broker_fee_twd ?? 0),
+      hs_code: row.hs_code ?? '',
+      tariff_rate: String(row.tariff_rate ?? 0),
+      business_tax_rate: String(row.business_tax_rate ?? 5),
+      notes: row.notes ?? '',
+    };
+  }
+
+  function calcUnitCost(row: Row) {
+    const rQty = Number(row.quantity) || 1;
+    const rCif = (Number(row.unit_price_usd) * rQty + Number(row.freight_usd) + Number(row.insurance_usd)) * Number(row.exchange_rate_usd);
+    const rTariff = rCif * (Number(row.tariff_rate) / 100);
+    const rBiz = (rCif + rTariff) * (Number(row.business_tax_rate) / 100);
+    return (rCif + rTariff + rBiz + Number(row.customs_broker_fee_twd)) / rQty;
+  }
+
+  async function save() {
+    if (!supabase || !form.calc_name.trim()) return;
+    setSaving(true);
+    localStorage.setItem('customs_last_rate', form.exchange_rate_usd);
+    const payload = {
+      calc_name: form.calc_name.trim(),
+      product_id: form.product_id || null,
+      calc_mode: form.calc_mode,
+      transport_type: form.transport_type,
+      quantity: n('quantity'),
+      unit_price_usd: n('unit_price_usd'),
+      exchange_rate_usd: n('exchange_rate_usd'),
+      freight_usd: n('freight_usd'),
+      insurance_usd: n('insurance_usd'),
+      customs_broker_fee_twd: n('customs_broker_fee_twd'),
+      hs_code: form.hs_code.trim() || null,
+      tariff_rate: n('tariff_rate'),
+      business_tax_rate: n('business_tax_rate'),
+      notes: form.notes.trim() || null,
+    };
+    const { error } = editing
+      ? await supabase.from('customs_calculations').update(payload).eq('id', editing.id)
+      : await supabase.from('customs_calculations').insert(payload);
+    if (error) { setMsg(`❌ ${error.message}`); setSaving(false); return; }
+    await reload();
+    setOpen(false);
+    setEditing(null);
+    setMsg('');
+    setSaving(false);
+  }
+
+  async function remove(id: string) {
+    if (!supabase || !confirm('確定刪除此試算記錄？')) return;
+    await supabase.from('customs_calculations').delete().eq('id', id);
+    setRecords(r => r.filter(x => x.id !== id));
+  }
+
+  function openNew(base?: Row) {
+    setEditing(null);
+    setForm(base
+      ? { ...rowToForm(base), calc_name: `${base.calc_name}（複製）` }
+      : { ...EMPTY, product_id: filterProductId });
+    setOpen(true);
+  }
+
+  function openEdit(row: Row) {
+    setEditing(row);
+    setForm(rowToForm(row));
+    setOpen(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  const displayRecords = filterProductId
+    ? records.filter(r => r.product_id === filterProductId)
+    : records;
+  const filterProduct = filterProductId ? products.find(p => p.id === filterProductId) : null;
+
+  const inputCls = 'w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:border-[#572A87] focus:outline-none';
+  const labelCls = 'mb-1 block text-xs font-medium text-slate-600';
+
+  return (
+    <div className="space-y-6">
+      {/* ── Header ── */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-ink flex items-center gap-2">
+            <Ship className="h-5 w-5 text-[#572A87]" /> 報關試算
+          </h2>
+          <p className="mt-0.5 text-sm text-slate-500">FOB 出廠報價 → 台灣到台完整成本試算</p>
+        </div>
+        <button onClick={() => openNew()}
+          className="inline-flex items-center gap-2 rounded-md bg-[#572A87] px-4 py-2 text-sm text-white hover:opacity-90">
+          <Plus className="h-4 w-4" /> 新增試算
+        </button>
+      </div>
+
+      {filterProduct && (
+        <div className="flex items-center gap-2 rounded-lg border border-[#C5AAE1] bg-[#C5AAE1]/20 px-4 py-2.5 text-sm">
+          <Ship className="h-4 w-4 text-[#572A87]" />
+          <span className="text-[#572A87]">篩選中：<strong>{filterProduct.name}</strong>{filterProduct.sku ? `（${filterProduct.sku}）` : ''}</span>
+          <button onClick={() => setSearchParams({})} className="ml-auto rounded-full bg-[#572A87]/10 px-2 py-0.5 text-xs text-[#572A87] hover:bg-[#572A87]/20">✕ 清除篩選</button>
+        </div>
+      )}
+
+      {msg && <Notice tone={msg.startsWith('❌') ? 'error' : 'success'}>{msg}</Notice>}
+
+      {/* ── Form ── */}
+      {open && (
+        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-soft">
+          <div className="mb-5 flex items-center justify-between">
+            <h3 className="font-semibold text-ink">{editing ? '編輯試算' : '新增試算'}</h3>
+            <button onClick={() => { setOpen(false); setEditing(null); }} className="text-slate-400 hover:text-slate-600 text-lg leading-none">✕</button>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+            {/* Left – inputs */}
+            <div className="space-y-4">
+              {/* 名稱 + 商品 */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={labelCls}>計算名稱 *</label>
+                  <input className={inputCls} value={form.calc_name} onChange={field('calc_name')} placeholder="例：AS1SG0002 大貨報關" />
+                </div>
+                <div>
+                  <label className={labelCls}>關聯商品（可選）</label>
+                  <select className={inputCls} value={form.product_id} onChange={field('product_id')}>
+                    <option value="">— 不關聯商品 —</option>
+                    {products.map(p => <option key={p.id} value={p.id}>{p.sku ? `${p.sku}  ` : ''}{p.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* 模式 + 運輸 */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={labelCls}>試算模式</label>
+                  <div className="flex gap-1.5">
+                    {(['estimate', 'actual'] as const).map(v => (
+                      <button key={v} type="button" onClick={() => setForm(f => ({ ...f, calc_mode: v }))}
+                        className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${form.calc_mode === v ? (v === 'estimate' ? 'bg-[#984696] text-white' : 'bg-[#572A87] text-white') : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                        {v === 'estimate' ? '估算' : '精算'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className={labelCls}>運輸方式</label>
+                  <div className="flex gap-1.5">
+                    {(['sea', 'air'] as const).map(v => (
+                      <button key={v} type="button" onClick={() => setForm(f => ({ ...f, transport_type: v }))}
+                        className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${form.transport_type === v ? 'bg-[#572A87] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                        {v === 'sea' ? '🚢 海運' : '✈️ 空運'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 數量 + FOB + 匯率 */}
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className={labelCls}>數量（件）</label>
+                  <input type="number" min="1" className={inputCls} value={form.quantity} onChange={field('quantity')} />
+                </div>
+                <div>
+                  <label className={labelCls}>FOB 單價（USD）</label>
+                  <input type="number" min="0" step="0.0001" className={inputCls} value={form.unit_price_usd} onChange={field('unit_price_usd')} placeholder="0.00" />
+                </div>
+                <div>
+                  <label className={labelCls}>匯率 USD → TWD</label>
+                  <input type="number" min="0" step="0.01" className={inputCls} value={form.exchange_rate_usd} onChange={field('exchange_rate_usd')} />
+                </div>
+              </div>
+
+              {/* 運費 + 保險 + 報關行 */}
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className={labelCls}>運費（USD）</label>
+                  <input type="number" min="0" step="0.01" className={inputCls} value={form.freight_usd} onChange={field('freight_usd')} />
+                </div>
+                <div>
+                  <label className={labelCls}>保險費（USD，選填）</label>
+                  <input type="number" min="0" step="0.01" className={inputCls} value={form.insurance_usd} onChange={field('insurance_usd')} />
+                </div>
+                <div>
+                  <label className={labelCls}>報關行手續費（TWD）</label>
+                  <input type="number" min="0" className={inputCls} value={form.customs_broker_fee_twd} onChange={field('customs_broker_fee_twd')} />
+                </div>
+              </div>
+
+              {/* HS Code + 關稅率 + 營業稅 */}
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className={labelCls}>HS Code 關稅稅號</label>
+                  <input className={inputCls} value={form.hs_code} onChange={field('hs_code')} placeholder="例：6304.91.0000" />
+                </div>
+                <div>
+                  <label className={labelCls}>關稅率 %</label>
+                  <input type="number" min="0" max="100" step="0.01" className={inputCls} value={form.tariff_rate} onChange={field('tariff_rate')} />
+                </div>
+                <div>
+                  <label className={labelCls}>營業稅率 %</label>
+                  <input type="number" min="0" max="100" step="0.01" className={inputCls} value={form.business_tax_rate} onChange={field('business_tax_rate')} />
+                </div>
+              </div>
+
+              {/* 備註 */}
+              <div>
+                <label className={labelCls}>備註（可填報價日期、匯率來源等）</label>
+                <textarea rows={2} className={`${inputCls} resize-none`} value={form.notes} onChange={field('notes')}
+                  placeholder="例：2026-06-18 報價，USD/TWD 參考台灣銀行即期匯率" />
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => { setOpen(false); setEditing(null); }}
+                  className="rounded-md border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">取消</button>
+                <button type="button" onClick={save} disabled={saving || !form.calc_name.trim()}
+                  className="rounded-md bg-[#572A87] px-6 py-2 text-sm text-white hover:opacity-90 disabled:opacity-40">
+                  {saving ? '儲存中…' : '儲存試算'}
+                </button>
+              </div>
+            </div>
+
+            {/* Right – live results */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-slate-700">即時試算結果</h4>
+
+              {/* 費用拆解 */}
+              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm space-y-2">
+                <div className="flex justify-between text-slate-500">
+                  <span>FOB 金額（TWD）</span>
+                  <span className="tabular-nums">{formatCurrency(n('unit_price_usd') * qty * n('exchange_rate_usd'))}</span>
+                </div>
+                <div className="flex justify-between text-slate-500">
+                  <span>+ 運費（TWD）</span>
+                  <span className="tabular-nums">{formatCurrency(n('freight_usd') * n('exchange_rate_usd'))}</span>
+                </div>
+                <div className="flex justify-between text-slate-500">
+                  <span>+ 保險費（TWD）</span>
+                  <span className="tabular-nums">{formatCurrency(n('insurance_usd') * n('exchange_rate_usd'))}</span>
+                </div>
+                <div className="flex justify-between border-t border-slate-200 pt-2 font-semibold text-slate-700">
+                  <span>CIF（台幣）</span>
+                  <span className="tabular-nums">{formatCurrency(cifTwd)}</span>
+                </div>
+                <div className="flex justify-between text-slate-500">
+                  <span>關稅（{n('tariff_rate')}%）</span>
+                  <span className="tabular-nums">{formatCurrency(tariff)}</span>
+                </div>
+                <div className="flex justify-between text-slate-500">
+                  <span>營業稅（{n('business_tax_rate')}%）</span>
+                  <span className="tabular-nums">{formatCurrency(bizTax)}</span>
+                </div>
+                <div className="flex justify-between text-slate-500">
+                  <span>+ 報關行費用</span>
+                  <span className="tabular-nums">{formatCurrency(n('customs_broker_fee_twd'))}</span>
+                </div>
+                <div className="flex justify-between border-t border-slate-200 pt-2 font-semibold text-slate-800">
+                  <span>總到台成本</span>
+                  <span className="tabular-nums">{formatCurrency(totalTwd)}</span>
+                </div>
+              </div>
+
+              {/* 單件成本 */}
+              <div className="rounded-lg border border-[#86B926]/50 bg-[#86B926]/8 p-4" style={{ backgroundColor: 'rgba(134,185,38,0.08)' }}>
+                <p className="text-xs text-slate-500 mb-0.5">單件到台成本（÷ {qty || 1} 件）</p>
+                <p className="text-3xl font-extrabold tabular-nums" style={{ color: '#86B926' }}>{formatCurrency(unitTwd)}</p>
+              </div>
+
+              {/* 建議售價 */}
+              <div className="rounded-lg border border-[#C5AAE1] bg-[#C5AAE1]/15 p-4 space-y-2.5">
+                <p className="text-xs font-semibold text-[#572A87]">建議售價參考（成本加成）</p>
+                {[['30', 1.3], ['50', 1.5]] .map(([pct, mult]) => (
+                  <div key={String(pct)} className="flex items-center justify-between">
+                    <span className="text-xs text-slate-500">成本 +{pct}%</span>
+                    <span className="font-semibold tabular-nums text-[#572A87]">{formatCurrency(unitTwd * (mult as number))}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── History ── */}
+      <section className="rounded-xl border border-slate-200 bg-white shadow-soft">
+        <div className="border-b border-slate-100 px-5 py-4 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-ink">試算記錄</h3>
+            <p className="text-xs text-slate-400 mt-0.5">共 {displayRecords.length} 筆</p>
+          </div>
+        </div>
+        {loadingData ? (
+          <p className="p-10 text-center text-sm text-slate-400">載入中…</p>
+        ) : displayRecords.length === 0 ? (
+          <p className="p-10 text-center text-sm text-slate-400">尚無試算記錄，點擊右上角「新增試算」開始</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="border-b border-slate-100 bg-slate-50 text-xs text-slate-500">
+                <tr>
+                  {['計算名稱', '關聯商品', '模式', '運輸', '數量', '單件到台成本', '建立日期', '操作'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {displayRecords.map(row => (
+                  <tr key={row.id} className="border-t border-slate-50 hover:bg-slate-50/60">
+                    <td className="px-4 py-3 font-medium text-ink max-w-[200px] truncate">{row.calc_name}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs">
+                      {row.products ? <><span className="text-slate-400">{row.products.sku}</span> {row.products.name}</> : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium text-white"
+                        style={{ backgroundColor: row.calc_mode === 'actual' ? '#572A87' : '#984696' }}>
+                        {row.calc_mode === 'actual' ? '精算' : '估算'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{row.transport_type === 'sea' ? '🚢 海運' : '✈️ 空運'}</td>
+                    <td className="px-4 py-3 tabular-nums text-slate-600">{Number(row.quantity).toLocaleString('zh-TW')}</td>
+                    <td className="px-4 py-3 font-semibold tabular-nums" style={{ color: '#86B926' }}>
+                      {formatCurrency(calcUnitCost(row))}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-400">{String(row.created_at || '').slice(0, 10)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-3">
+                        <button onClick={() => openEdit(row)} className="text-xs text-[#572A87] hover:underline">編輯</button>
+                        <button onClick={() => openNew(row)} className="text-xs text-slate-500 hover:underline">複製</button>
+                        <button onClick={() => remove(row.id)} className="text-xs text-red-400 hover:underline">刪除</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 function statusText(value: string) {
