@@ -1,7 +1,7 @@
 import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
-import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { BarChart3, Boxes, DollarSign, LayoutDashboard, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
@@ -4582,13 +4582,21 @@ function CustomsCalculationsPage() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [hsDropOpen, setHsDropOpen] = useState(false);
+  // 運費設定面板
+  const [freightPresets, setFreightPresets] = useState<Row[]>([]);
+  const [freightPanelOpen, setFreightPanelOpen] = useState(false);
+  const [editingPreset, setEditingPreset] = useState<Row | null>(null);
+  const EMPTY_PRESET = { name: '', freight_type: 'sea_express', rate_per_kg_twd: '', min_charge_twd: '', notes: '' };
+  const [presetForm, setPresetForm] = useState<Record<string, string>>(EMPTY_PRESET);
+  const [presetSaving, setPresetSaving] = useState(false);
 
   const defaultRate = localStorage.getItem('customs_last_rate') || '32.5';
   const EMPTY: Record<string, string> = {
     calc_name: '', product_id: filterProductId,
-    calc_mode: 'estimate', transport_type: 'sea',
+    calc_mode: 'estimate', freight_type: 'sea_express',
     quantity: '1', unit_price_usd: '', exchange_rate_usd: defaultRate,
-    freight_usd: '0', insurance_usd: '0', customs_broker_fee_twd: '0',
+    unit_weight_kg: '', freight_rate_twd: '', freight_min_twd: '',
+    insurance_usd: '0', customs_broker_fee_twd: '0',
     hs_code: '', tariff_rate: '0', business_tax_rate: '5', notes: '',
   };
   const [form, setForm] = useState<Record<string, string>>(EMPTY);
@@ -4600,21 +4608,36 @@ function CustomsCalculationsPage() {
     setRecords(data ?? []);
   }
 
+  async function reloadPresets() {
+    if (!supabase) return;
+    const { data } = await supabase.from('freight_rate_presets').select('*').order('created_at');
+    setFreightPresets(data ?? []);
+  }
+
   useEffect(() => {
     if (!supabase) return;
     Promise.all([
       supabase.from('customs_calculations').select('*, products(id,name,sku)').order('created_at', { ascending: false }),
       supabase.from('products').select('id,name,sku').order('name'),
-    ]).then(([{ data: calcs }, { data: prods }]) => {
+      supabase.from('freight_rate_presets').select('*').order('created_at'),
+    ]).then(([{ data: calcs }, { data: prods }, { data: presets }]) => {
       setRecords(calcs ?? []);
       setProducts(prods ?? []);
+      setFreightPresets(presets ?? []);
       setLoadingData(false);
     });
   }, []);
 
+  // ── 即時試算 ──
   const n = (k: string) => parseFloat(form[k]) || 0;
   const qty = n('quantity');
-  const cifTwd = (n('unit_price_usd') * qty + n('freight_usd') + n('insurance_usd')) * n('exchange_rate_usd');
+  const totalWeightKg = n('unit_weight_kg') * qty;
+  const computedFreightTwd = n('freight_rate_twd') > 0
+    ? Math.max(totalWeightKg * n('freight_rate_twd'), n('freight_min_twd'))
+    : 0;
+  const fobTwd = n('unit_price_usd') * qty * n('exchange_rate_usd');
+  const insuranceTwd = n('insurance_usd') * n('exchange_rate_usd');
+  const cifTwd = fobTwd + computedFreightTwd + insuranceTwd;
   const tariff = cifTwd * (n('tariff_rate') / 100);
   const bizTax = (cifTwd + tariff) * (n('business_tax_rate') / 100);
   const totalTwd = cifTwd + tariff + bizTax + n('customs_broker_fee_twd');
@@ -4622,17 +4645,22 @@ function CustomsCalculationsPage() {
 
   const field = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
+  const pField = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+    setPresetForm(f => ({ ...f, [k]: e.target.value }));
 
   function rowToForm(row: Row): Record<string, string> {
+    const ft = row.freight_type ?? (row.transport_type === 'air' ? 'air' : 'sea_normal');
     return {
       calc_name: row.calc_name ?? '',
       product_id: row.product_id ?? '',
       calc_mode: row.calc_mode ?? 'estimate',
-      transport_type: row.transport_type ?? 'sea',
+      freight_type: ft,
       quantity: String(row.quantity ?? 1),
       unit_price_usd: String(row.unit_price_usd ?? ''),
       exchange_rate_usd: String(row.exchange_rate_usd ?? 32.5),
-      freight_usd: String(row.freight_usd ?? 0),
+      unit_weight_kg: String(row.unit_weight_kg ?? ''),
+      freight_rate_twd: String(row.freight_rate_twd ?? ''),
+      freight_min_twd: String(row.freight_min_twd ?? ''),
       insurance_usd: String(row.insurance_usd ?? 0),
       customs_broker_fee_twd: String(row.customs_broker_fee_twd ?? 0),
       hs_code: row.hs_code ?? '',
@@ -4642,9 +4670,20 @@ function CustomsCalculationsPage() {
     };
   }
 
+  function calcFreightTwd(row: Row): number {
+    if (row.freight_rate_twd && Number(row.freight_rate_twd) > 0) {
+      const kg = Number(row.unit_weight_kg || 0) * Number(row.quantity || 1);
+      return Math.max(kg * Number(row.freight_rate_twd), Number(row.freight_min_twd) || 0);
+    }
+    // 相容舊資料（freight_usd）
+    return Number(row.freight_usd || 0) * Number(row.exchange_rate_usd || 1);
+  }
+
   function calcUnitCost(row: Row) {
     const rQty = Number(row.quantity) || 1;
-    const rCif = (Number(row.unit_price_usd) * rQty + Number(row.freight_usd) + Number(row.insurance_usd)) * Number(row.exchange_rate_usd);
+    const rFob = Number(row.unit_price_usd) * rQty * Number(row.exchange_rate_usd);
+    const rIns = Number(row.insurance_usd || 0) * Number(row.exchange_rate_usd);
+    const rCif = rFob + calcFreightTwd(row) + rIns;
     const rTariff = rCif * (Number(row.tariff_rate) / 100);
     const rBiz = (rCif + rTariff) * (Number(row.business_tax_rate) / 100);
     return (rCif + rTariff + rBiz + Number(row.customs_broker_fee_twd)) / rQty;
@@ -4658,11 +4697,15 @@ function CustomsCalculationsPage() {
       calc_name: form.calc_name.trim(),
       product_id: form.product_id || null,
       calc_mode: form.calc_mode,
-      transport_type: form.transport_type,
+      transport_type: form.freight_type === 'air' ? 'air' : 'sea',
+      freight_type: form.freight_type,
       quantity: n('quantity'),
       unit_price_usd: n('unit_price_usd'),
       exchange_rate_usd: n('exchange_rate_usd'),
-      freight_usd: n('freight_usd'),
+      unit_weight_kg: n('unit_weight_kg') || null,
+      freight_rate_twd: n('freight_rate_twd') || null,
+      freight_min_twd: n('freight_min_twd') || null,
+      freight_usd: 0,
       insurance_usd: n('insurance_usd'),
       customs_broker_fee_twd: n('customs_broker_fee_twd'),
       hs_code: form.hs_code.trim() || null,
@@ -4679,6 +4722,38 @@ function CustomsCalculationsPage() {
     setEditing(null);
     setMsg('');
     setSaving(false);
+  }
+
+  async function savePreset() {
+    if (!supabase || !presetForm.name.trim()) return;
+    setPresetSaving(true);
+    const payload = {
+      name: presetForm.name.trim(),
+      freight_type: presetForm.freight_type,
+      rate_per_kg_twd: parseFloat(presetForm.rate_per_kg_twd) || 0,
+      min_charge_twd: parseFloat(presetForm.min_charge_twd) || null,
+      notes: presetForm.notes.trim() || null,
+    };
+    const { error } = editingPreset
+      ? await supabase.from('freight_rate_presets').update(payload).eq('id', editingPreset.id)
+      : await supabase.from('freight_rate_presets').insert(payload);
+    if (!error) { await reloadPresets(); setEditingPreset(null); setPresetForm(EMPTY_PRESET); }
+    setPresetSaving(false);
+  }
+
+  async function removePreset(id: string) {
+    if (!supabase || !confirm('確定刪除此運費設定？')) return;
+    await supabase.from('freight_rate_presets').delete().eq('id', id);
+    setFreightPresets(p => p.filter(x => x.id !== id));
+  }
+
+  function applyPreset(preset: Row) {
+    setForm(f => ({
+      ...f,
+      freight_type: preset.freight_type,
+      freight_rate_twd: String(preset.rate_per_kg_twd),
+      freight_min_twd: String(preset.min_charge_twd ?? ''),
+    }));
   }
 
   async function remove(id: string) {
@@ -4720,10 +4795,16 @@ function CustomsCalculationsPage() {
           </h2>
           <p className="mt-0.5 text-sm text-slate-500">FOB 出廠報價 → 台灣到台完整成本試算</p>
         </div>
-        <button onClick={() => openNew()}
-          className="inline-flex items-center gap-2 rounded-md bg-[#572A87] px-4 py-2 text-sm text-white hover:opacity-90">
-          <Plus className="h-4 w-4" /> 新增試算
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setFreightPanelOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:border-[#572A87] hover:text-[#572A87] transition-colors">
+            <Settings className="h-4 w-4" /> 運費設定
+          </button>
+          <button onClick={() => openNew()}
+            className="inline-flex items-center gap-2 rounded-md bg-[#572A87] px-4 py-2 text-sm text-white hover:opacity-90">
+            <Plus className="h-4 w-4" /> 新增試算
+          </button>
+        </div>
       </div>
 
       {filterProduct && (
@@ -4778,10 +4859,17 @@ function CustomsCalculationsPage() {
                 <div>
                   <label className={labelCls}>運輸方式</label>
                   <div className="flex gap-1.5">
-                    {(['sea', 'air'] as const).map(v => (
-                      <button key={v} type="button" onClick={() => setForm(f => ({ ...f, transport_type: v }))}
-                        className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${form.transport_type === v ? 'bg-[#572A87] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                        {v === 'sea' ? '🚢 海運' : '✈️ 空運'}
+                    {([['sea_normal','🚢 海運'],['sea_express','⚡ 海快'],['air','✈️ 空運']] as [string,string][]).map(([v, label]) => (
+                      <button key={v} type="button" onClick={() => {
+                        const matched = freightPresets.find(p => p.freight_type === v);
+                        setForm(f => ({
+                          ...f,
+                          freight_type: v,
+                          ...(matched ? { freight_rate_twd: String(matched.rate_per_kg_twd), freight_min_twd: String(matched.min_charge_twd ?? '') } : {}),
+                        }));
+                      }}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${form.freight_type === v ? 'bg-[#572A87] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                        {label}
                       </button>
                     ))}
                   </div>
@@ -4804,12 +4892,56 @@ function CustomsCalculationsPage() {
                 </div>
               </div>
 
-              {/* 運費 + 保險 + 報關行 */}
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div>
-                  <label className={labelCls}>運費（USD）</label>
-                  <input type="number" min="0" step="0.01" className={inputCls} value={form.freight_usd} onChange={field('freight_usd')} />
+              {/* 運費計算區塊 */}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-700">運費設定</span>
+                  {freightPresets.length > 0 && (
+                    <select
+                      className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 focus:border-[#572A87] focus:outline-none"
+                      value=""
+                      onChange={e => {
+                        const p = freightPresets.find(x => x.id === e.target.value);
+                        if (p) applyPreset(p);
+                      }}
+                    >
+                      <option value="">套用常用設定…</option>
+                      {freightPresets.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}（${p.rate_per_kg_twd}/kg{p.min_charge_twd ? `，最低$${p.min_charge_twd}` : ''}）
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className={labelCls}>每 kg 費率（TWD）</label>
+                    <input type="number" min="0" step="0.01" className={inputCls} value={form.freight_rate_twd} onChange={field('freight_rate_twd')} placeholder="例：45" />
+                  </div>
+                  <div>
+                    <label className={labelCls}>最低收費（TWD，選填）</label>
+                    <input type="number" min="0" className={inputCls} value={form.freight_min_twd} onChange={field('freight_min_twd')} placeholder="例：300" />
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3 items-end">
+                  <div>
+                    <label className={labelCls}>單件重量（kg，含包裝）</label>
+                    <input type="number" min="0" step="0.001" className={inputCls} value={form.unit_weight_kg} onChange={field('unit_weight_kg')} placeholder="例：0.35" />
+                  </div>
+                  <div className="rounded-md bg-white border border-slate-200 px-3 py-2 text-sm">
+                    <p className="text-xs text-slate-400 mb-0.5">總重量</p>
+                    <p className="font-medium tabular-nums text-slate-700">{(totalWeightKg || 0).toFixed(2)} kg</p>
+                  </div>
+                  <div className="rounded-md bg-white border border-slate-200 px-3 py-2 text-sm">
+                    <p className="text-xs text-slate-400 mb-0.5">預估運費</p>
+                    <p className="font-semibold tabular-nums" style={{ color: '#572A87' }}>{formatCurrency(computedFreightTwd)}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 保險 + 報關行 */}
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className={labelCls}>保險費（USD，選填）</label>
                   <input type="number" min="0" step="0.01" className={inputCls} value={form.insurance_usd} onChange={field('insurance_usd')} />
@@ -4917,11 +5049,19 @@ function CustomsCalculationsPage() {
               <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm space-y-2">
                 <div className="flex justify-between text-slate-500">
                   <span>FOB 金額（TWD）</span>
-                  <span className="tabular-nums">{formatCurrency(n('unit_price_usd') * qty * n('exchange_rate_usd'))}</span>
+                  <span className="tabular-nums">{formatCurrency(fobTwd)}</span>
                 </div>
                 <div className="flex justify-between text-slate-500">
-                  <span>+ 運費（TWD）</span>
-                  <span className="tabular-nums">{formatCurrency(n('freight_usd') * n('exchange_rate_usd'))}</span>
+                  <div>
+                    <span>+ 運費（TWD）</span>
+                    {n('freight_rate_twd') > 0 && totalWeightKg > 0 && (
+                      <p className="text-[10px] text-slate-400">
+                        {totalWeightKg.toFixed(2)} kg × ${n('freight_rate_twd')}
+                        {n('freight_min_twd') > 0 && ` (最低 $${n('freight_min_twd')})`}
+                      </p>
+                    )}
+                  </div>
+                  <span className="tabular-nums">{formatCurrency(computedFreightTwd)}</span>
                 </div>
                 <div className="flex justify-between text-slate-500">
                   <span>+ 保險費（TWD）</span>
@@ -5005,7 +5145,9 @@ function CustomsCalculationsPage() {
                         {row.calc_mode === 'actual' ? '精算' : '估算'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{row.transport_type === 'sea' ? '🚢 海運' : '✈️ 空運'}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {(row.freight_type ?? row.transport_type) === 'sea_express' ? '⚡ 海快' : (row.freight_type ?? row.transport_type) === 'air' ? '✈️ 空運' : '🚢 海運'}
+                    </td>
                     <td className="px-4 py-3 tabular-nums text-slate-600">{Number(row.quantity).toLocaleString('zh-TW')}</td>
                     <td className="px-4 py-3 font-semibold tabular-nums" style={{ color: '#86B926' }}>
                       {formatCurrency(calcUnitCost(row))}
@@ -5025,6 +5167,88 @@ function CustomsCalculationsPage() {
           </div>
         )}
       </section>
+
+      {/* ── 運費設定側滑面板 ── */}
+      {freightPanelOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/30" onClick={() => { setFreightPanelOpen(false); setEditingPreset(null); setPresetForm(EMPTY_PRESET); }} />
+          <div className="relative flex w-full max-w-md flex-col bg-white shadow-xl overflow-y-auto">
+            <div className="border-b border-slate-100 px-5 py-4 flex items-center justify-between sticky top-0 bg-white z-10">
+              <h3 className="font-semibold text-ink flex items-center gap-2"><Settings className="h-4 w-4 text-[#572A87]" /> 常用運費設定</h3>
+              <button onClick={() => { setFreightPanelOpen(false); setEditingPreset(null); setPresetForm(EMPTY_PRESET); }} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+
+            {/* 設定清單 */}
+            <div className="p-5 space-y-3 flex-1">
+              {freightPresets.length === 0 && (
+                <p className="text-sm text-slate-400 text-center py-4">尚無設定，請新增</p>
+              )}
+              {freightPresets.map(p => {
+                const typeLabel = p.freight_type === 'sea_express' ? '⚡ 海快' : p.freight_type === 'air' ? '✈️ 空運' : '🚢 海運';
+                const typeColor = p.freight_type === 'air' ? '#3E651C' : p.freight_type === 'sea_express' ? '#572A87' : '#9DD0E0';
+                return (
+                  <div key={p.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium text-white" style={{ backgroundColor: typeColor }}>{typeLabel}</span>
+                        <span className="font-medium text-sm text-ink">{p.name}</span>
+                      </div>
+                      <div className="flex gap-2 text-xs">
+                        <button onClick={() => { setEditingPreset(p); setPresetForm({ name: p.name, freight_type: p.freight_type, rate_per_kg_twd: String(p.rate_per_kg_twd), min_charge_twd: String(p.min_charge_twd ?? ''), notes: p.notes ?? '' }); }} className="text-[#572A87] hover:underline">編輯</button>
+                        <button onClick={() => removePreset(p.id)} className="text-red-400 hover:underline">刪除</button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-500">${p.rate_per_kg_twd}/kg{p.min_charge_twd ? `，最低 $${p.min_charge_twd}` : ''}{p.notes ? `　${p.notes}` : ''}</p>
+                  </div>
+                );
+              })}
+
+              {/* 新增 / 編輯表單 */}
+              <div className="rounded-lg border border-[#C5AAE1] bg-[#C5AAE1]/10 p-4 space-y-3">
+                <p className="text-xs font-semibold text-[#572A87]">{editingPreset ? '編輯設定' : '新增設定'}</p>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">名稱</label>
+                  <input className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:border-[#572A87] focus:outline-none" value={presetForm.name} onChange={pField('name')} placeholder="例：海快 A 物流" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">運輸方式</label>
+                  <div className="flex gap-1.5">
+                    {([['sea_normal','🚢 海運'],['sea_express','⚡ 海快'],['air','✈️ 空運']] as [string,string][]).map(([v, label]) => (
+                      <button key={v} type="button" onClick={() => setPresetForm(f => ({ ...f, freight_type: v }))}
+                        className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${presetForm.freight_type === v ? 'bg-[#572A87] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">每 kg 費率（TWD）</label>
+                    <input type="number" min="0" step="0.01" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:border-[#572A87] focus:outline-none" value={presetForm.rate_per_kg_twd} onChange={pField('rate_per_kg_twd')} placeholder="45" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">最低收費（TWD）</label>
+                    <input type="number" min="0" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:border-[#572A87] focus:outline-none" value={presetForm.min_charge_twd} onChange={pField('min_charge_twd')} placeholder="300" />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">備註（選填）</label>
+                  <input className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:border-[#572A87] focus:outline-none" value={presetForm.notes} onChange={pField('notes')} placeholder="例：含稅、門到門" />
+                </div>
+                <div className="flex gap-2">
+                  {editingPreset && (
+                    <button type="button" onClick={() => { setEditingPreset(null); setPresetForm(EMPTY_PRESET); }} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-50">取消</button>
+                  )}
+                  <button type="button" onClick={savePreset} disabled={presetSaving || !presetForm.name.trim()}
+                    className="rounded-md bg-[#572A87] px-4 py-1.5 text-xs text-white hover:opacity-90 disabled:opacity-40">
+                    {presetSaving ? '儲存…' : editingPreset ? '更新' : '新增'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
