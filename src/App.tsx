@@ -5392,7 +5392,7 @@ function AllocationPage() {
               value={productLabel} onChange={e => setProductLabel(e.target.value)}>
               <option value="">— 不指定 —</option>
               {products.map(p => (
-                <option key={p.id} value={String(p.product_name || p.id)}>{String(p.product_name || p.id)}</option>
+                <option key={p.id} value={String(p.name || p.id)}>{p.sku ? `${p.sku} ` : ''}{String(p.name || p.id)}</option>
               ))}
             </select>
           </div>
