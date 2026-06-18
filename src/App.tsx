@@ -4531,6 +4531,18 @@ function ChannelSummary({ rows }: { rows: Array<{ label: string; quantity: numbe
   return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><h3 className="mb-4 font-semibold">通路業績</h3><div className="space-y-3">{rows.map((r, i) => <div key={r.label} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"><p><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}<span className="ml-2 text-slate-500">{total ? (r.revenue / total * 100).toFixed(1) : 0}%</span></p><p className="font-semibold text-leaf">{formatCurrency(r.revenue)}</p></div>)}<div className="grid gap-5 border-t pt-5 md:grid-cols-[260px_1fr] md:items-center"><div className="mx-auto grid h-60 w-60 place-items-center rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-sm"><p className="text-center text-sm font-semibold">{formatCurrency(total)}</p></div></div><div>{rows.map((r, i) => <p key={r.label} className="mb-2 text-sm"><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}</p>)}</div></div></div></section>;
 }
 
+// ── 常用 HS Code 預設清單 ─────────────────────────────────────────────────
+const HS_PRESETS = [
+  { code: '6004.10.9000', name: '針織布料（遮陽用）',         rate: 0    },
+  { code: '6211.43.9090', name: '防曬衣/帽子（合成纖維）',    rate: 12   },
+  { code: '6506.10.0000', name: '安全帽類（頭部防護）',        rate: 0    },
+  { code: '6217.10.9000', name: '袖套/防曬配件',              rate: 12   },
+  { code: '9004.10.0000', name: '太陽眼鏡',                   rate: 0    },
+  { code: '9004.90.9000', name: '其他眼鏡',                   rate: 0    },
+  { code: '4202.32.0000', name: '眼鏡盒/鏡包',               rate: 12.5 },
+  { code: '4202.92.9090', name: '其他包袋類',                 rate: 12.5 },
+] as const;
+
 // ── 報關試算頁：商品詳情連結 ────────────────────────────────────────────
 function CustomsCalcLink({ productId }: { productId: string }) {
   const [count, setCount] = useState<number | null>(null);
@@ -4569,6 +4581,7 @@ function CustomsCalculationsPage() {
   const [products, setProducts] = useState<Row[]>([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
+  const [hsDropOpen, setHsDropOpen] = useState(false);
 
   const defaultRate = localStorage.getItem('customs_last_rate') || '32.5';
   const EMPTY: Record<string, string> = {
@@ -4811,7 +4824,63 @@ function CustomsCalculationsPage() {
               <div className="grid gap-4 sm:grid-cols-3">
                 <div>
                   <label className={labelCls}>HS Code 關稅稅號</label>
-                  <input className={inputCls} value={form.hs_code} onChange={field('hs_code')} placeholder="例：6304.91.0000" />
+                  <div className="relative">
+                    <div className="flex gap-1">
+                      <div className="relative flex-1">
+                        <input
+                          className={inputCls}
+                          value={form.hs_code}
+                          onChange={e => {
+                            setForm(f => ({ ...f, hs_code: e.target.value }));
+                            setHsDropOpen(true);
+                          }}
+                          onFocus={() => setHsDropOpen(true)}
+                          onBlur={() => setTimeout(() => setHsDropOpen(false), 150)}
+                          placeholder="例：9004.10.0000"
+                          autoComplete="off"
+                        />
+                        {hsDropOpen && (() => {
+                          const q = form.hs_code.toLowerCase();
+                          const filtered = HS_PRESETS.filter(p =>
+                            p.code.includes(q) || p.name.toLowerCase().includes(q)
+                          );
+                          if (!filtered.length) return null;
+                          return (
+                            <ul className="absolute left-0 top-full z-50 mt-1 w-[340px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg text-xs">
+                              {filtered.map(p => (
+                                <li key={p.code}>
+                                  <button
+                                    type="button"
+                                    onMouseDown={() => {
+                                      setForm(f => ({ ...f, hs_code: p.code, tariff_rate: String(p.rate) }));
+                                      setHsDropOpen(false);
+                                    }}
+                                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-[#C5AAE1]/20"
+                                  >
+                                    <span>
+                                      <span className="font-mono font-medium text-[#572A87]">{p.code}</span>
+                                      <span className="ml-2 text-slate-500">{p.name}</span>
+                                    </span>
+                                    <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-slate-600">{p.rate}%</span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          );
+                        })()}
+                      </div>
+                      <a
+                        href="https://web.customs.gov.tw/etarifftxt/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="查詢稅則"
+                        className="flex items-center rounded-md border border-slate-200 px-2 text-slate-500 hover:border-[#572A87] hover:text-[#572A87] transition-colors"
+                      >
+                        🔍
+                      </a>
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-400">輸入代碼或品名可篩選常用稅號</p>
+                  </div>
                 </div>
                 <div>
                   <label className={labelCls}>關稅率 %</label>
