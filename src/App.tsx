@@ -2043,6 +2043,31 @@ function SalesPage() {
   }, [records, productSearchKw]);
   const productRows = rank(group(records, salesProductLabel)).slice(0, 10);
 
+  // 分類業績合計
+  const CAT_LIST = [
+    { code: 'AH1HC', name: '發熱衣物' },
+    { code: 'AS1SG', name: '太陽眼鏡' },
+    { code: 'AS1SE', name: '涼感其他' },
+    { code: 'AS1SC', name: '防曬衣物' },
+    { code: 'AS1SB', name: '遮陽帽' },
+    { code: 'AD1DC', name: '夾扇' },
+    { code: 'AH1HE', name: '保暖衣物' },
+  ] as const;
+  const catSales = useMemo(() => {
+    const totals = new Map(CAT_LIST.map(c => [c.code, { ...c, revenue: 0, qty: 0 }]));
+    for (const r of records) {
+      const prefix = String(r.external_sku || '').slice(0, 5).toUpperCase();
+      if (totals.has(prefix)) {
+        const t = totals.get(prefix)!;
+        t.revenue += Number(r.revenue) || 0;
+        t.qty += Number(r.quantity) || 0;
+      }
+    }
+    const rows = [...totals.values()].sort((a, b) => b.revenue - a.revenue);
+    const totalRev = rows.reduce((s, r) => s + r.revenue, 0);
+    return rows.map(r => ({ ...r, pct: totalRev > 0 ? (r.revenue / totalRev) * 100 : 0 }));
+  }, [records]);
+
   // MOM / YOY 成長率（用於顏色判斷）
   const momRate = prevMonth ? ((revenue - prevMonth) / Math.abs(prevMonth)) * 100 : revenue ? 100 : 0;
   const yoyRate = prevYear  ? ((revenue - prevYear)  / Math.abs(prevYear))  * 100 : revenue ? 100 : 0;
@@ -2260,6 +2285,38 @@ function SalesPage() {
 
       <Summary title="商品業績排行" rows={productRows} />
       <SalesRecordsTable records={records} />
+
+      {/* 分類業績合計 */}
+      <section className="rounded-xl bg-white p-5 shadow-sm border border-slate-100">
+        <h2 className="mb-4 font-semibold text-ink">分類業績合計</h2>
+        {catSales.every(c => c.revenue === 0) ? (
+          <p className="text-sm text-slate-400">所選期間無分類業績資料。</p>
+        ) : (
+          <div className="space-y-3">
+            {catSales.map(c => (
+              <div key={c.code}>
+                <div className="mb-1 flex items-center justify-between text-sm">
+                  <span className="font-medium text-ink">
+                    <span className="mr-1.5 font-mono text-xs text-slate-400">{c.code}</span>{c.name}
+                  </span>
+                  <div className="flex items-center gap-4 text-right">
+                    <span className="text-xs text-slate-400 tabular-nums">{c.qty.toLocaleString('zh-TW')} 件</span>
+                    <span className="w-28 font-semibold tabular-nums text-ink">{formatCurrency(c.revenue)}</span>
+                    <span className="w-12 text-xs text-slate-500 tabular-nums">{c.pct.toFixed(1)}%</span>
+                  </div>
+                </div>
+                <div className="h-2 w-full rounded-full bg-slate-100">
+                  <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${c.pct}%`, backgroundColor: '#86B926' }} />
+                </div>
+              </div>
+            ))}
+            <div className="mt-3 border-t border-slate-100 pt-3 flex justify-between text-xs text-slate-500">
+              <span>合計 {catSales.reduce((s,c)=>s+c.qty,0).toLocaleString('zh-TW')} 件</span>
+              <span className="font-semibold text-ink">{formatCurrency(catSales.reduce((s,c)=>s+c.revenue,0))}</span>
+            </div>
+          </div>
+        )}
+      </section>
     </Page>
   );
 }
