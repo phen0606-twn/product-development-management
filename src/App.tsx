@@ -1,7 +1,7 @@
 import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
-import { BarChart3, Boxes, DollarSign, LayoutDashboard, LayoutGrid, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { BarChart3, Boxes, Copy, DollarSign, LayoutDashboard, LayoutGrid, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
@@ -780,6 +780,12 @@ function ProductsPage() {
     products.reload();
   }
 
+  function copyProduct(row: Row) {
+    const { id, created_at, updated_at, ...rest } = row;
+    setEditing({ ...rest, name: `${row.name} - 複製`, sku: '', status: 'in_development' });
+    setOpen(true);
+  }
+
   async function remove(row: Row) {
     if (!supabase) return;
     const { count } = await supabase
@@ -872,7 +878,7 @@ function ProductsPage() {
                 </td>
                 <td className="p-3 text-xs text-slate-500">{String(row.created_at || '').slice(0, 10) || '—'}</td>
                 <td className="p-3">{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
-                <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
+                <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} onCopy={() => copyProduct(row)} /></td>
               </tr>
             );
           })}
@@ -916,7 +922,7 @@ function ProductsPage() {
                 </td>
                 <td className="p-3 text-xs" style={{ color: '#999999' }}>{String(row.created_at || '').slice(0, 10) || '—'}</td>
                 <td className="p-3" style={{ color: '#999999' }}>{vendors.rows.find((v) => v.id === row.vendor_id)?.name}</td>
-                <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} /></td>
+                <td className="p-3"><ActionButtons onEdit={() => { setEditing(row); setOpen(true); }} onDelete={() => remove(row)} onCopy={() => copyProduct(row)} /></td>
               </tr>
             );
           })}
@@ -1680,7 +1686,9 @@ function CostsPage() {
 }
 
 function ProductForm({ row, vendors, onSave, onCancel }: { row: Row | null; vendors: Row[]; onSave: (data: Row) => void; onCancel: () => void }) {
-  return <DataForm title={row ? '編輯商品' : '新增商品'} row={row} onSave={onSave} onCancel={onCancel} fields={[
+  const isCopy = !!row && !row.id;
+  const title = !row ? '新增商品' : isCopy ? '複製商品' : '編輯商品';
+  return <DataForm title={title} row={row} onSave={onSave} onCancel={onCancel} autoFocusKey={isCopy ? 'name' : undefined} fields={[
     ['sku', 'SKU'], ['name', '商品名稱', 'required'], ['category', '分類', 'select', CATEGORY_OPTIONS], ['color', '顏色'], ['size', '尺寸'],
     ['season', '季節'], ['owner', '負責人'],
     ['vendor_id', '廠商', 'select', vendors.map((v) => [v.id, v.name])],
@@ -1964,7 +1972,7 @@ function CostForm({ row, products, batches, onSave, onCancel }: { row: Row | nul
   );
 }
 
-function DataForm({ title, row, fields, onSave, onCancel }: { title: string; row: Row | null; fields: any[]; onSave: (data: Row) => void; onCancel: () => void }) {
+function DataForm({ title, row, fields, onSave, onCancel, autoFocusKey }: { title: string; row: Row | null; fields: any[]; onSave: (data: Row) => void; onCancel: () => void; autoFocusKey?: string }) {
   const [data, setData] = useState<Row>(row ?? {});
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(data); }} className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
@@ -1979,7 +1987,7 @@ function DataForm({ title, row, fields, onSave, onCancel }: { title: string; row
             ) : type === 'textarea' ? (
               <textarea value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} className="mt-1 min-h-24 w-full rounded-md border px-3 py-2" />
             ) : (
-              <input required={type === 'required'} type={type === 'date' || type === 'number' ? type : 'text'} step="0.0001" value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} className="mt-1 w-full rounded-md border px-3 py-2" />
+              <input required={type === 'required'} autoFocus={key === autoFocusKey} type={type === 'date' || type === 'number' ? type : 'text'} step="0.0001" value={data[key] ?? ''} onChange={(e) => setData({ ...data, [key]: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} className="mt-1 w-full rounded-md border px-3 py-2" />
             )}
           </label>
         ))}
@@ -4448,8 +4456,14 @@ function TopLinks({ links }: { links: Array<[string, string]> }) {
   return <div className="flex flex-wrap gap-2">{links.map(([to, label]) => <Link key={to} to={to} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">{label}</Link>)}</div>;
 }
 
-function ActionButtons({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
-  return <div className="flex gap-2"><button onClick={onEdit} className="rounded-md border border-slate-200 p-2 text-slate-600" title="重新編輯"><Pencil className="h-4 w-4" /></button><button onClick={onDelete} className="rounded-md border border-slate-200 p-2 text-coral" title="刪除"><Trash2 className="h-4 w-4" /></button></div>;
+function ActionButtons({ onEdit, onDelete, onCopy }: { onEdit: () => void; onDelete: () => void; onCopy?: () => void }) {
+  return (
+    <div className="flex gap-2">
+      {onCopy && <button onClick={onCopy} className="rounded-md border border-[#C5AAE1] bg-[#C5AAE1]/20 p-2 text-[#572A87] hover:bg-[#C5AAE1]/40 transition-colors" title="複製商品"><Copy className="h-4 w-4" /></button>}
+      <button onClick={onEdit} className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 transition-colors" title="編輯"><Pencil className="h-4 w-4" /></button>
+      <button onClick={onDelete} className="rounded-md border border-slate-200 p-2 text-coral hover:bg-red-50 transition-colors" title="刪除"><Trash2 className="h-4 w-4" /></button>
+    </div>
+  );
 }
 
 function Card({ label, value, helper, compact, tone = 'ink' }: { label: string; value: string; helper?: string; compact?: boolean; tone?: 'ink' | 'coral' | 'lime' | 'moss' }) {
