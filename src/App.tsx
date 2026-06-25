@@ -2073,7 +2073,7 @@ function SalesPage() {
   }, [records, productSearchKw]);
   const productRows = rank(group(records, salesProductLabel)).slice(0, 10);
 
-  // 分類業績合計
+  // 分類業績合計 + 目標達成分析（合併）
   const CAT_LIST = [
     { code: 'AH1HC', name: '發熱衣物' },
     { code: 'AS1SG', name: '太陽眼鏡' },
@@ -2083,52 +2083,41 @@ function SalesPage() {
     { code: 'AD1DC', name: '夾扇' },
     { code: 'AH1HE', name: '保暖衣物' },
   ] as const;
-  const catSales = useMemo(() => {
-    const totals = new Map(CAT_LIST.map(c => [c.code, { ...c, revenue: 0, qty: 0 }]));
-    for (const r of records) {
-      const prefix = String(r.external_sku || '').slice(0, 5).toUpperCase();
-      if (totals.has(prefix)) {
-        const t = totals.get(prefix)!;
-        t.revenue += Number(r.revenue) || 0;
-        t.qty += Number(r.quantity) || 0;
-      }
-    }
-    const rows = [...totals.values()].sort((a, b) => b.revenue - a.revenue);
-    const totalRev = rows.reduce((s, r) => s + r.revenue, 0);
-    return rows.map(r => ({ ...r, pct: totalRev > 0 ? (r.revenue / totalRev) * 100 : 0 }));
-  }, [records]);
-
-  // 目標達成分析
-  const targetAnalysis = useMemo(() => {
+  const catAnalysis = useMemo(() => {
     const momStart = shiftMonth(start, -1);
     const momEnd   = shiftMonth(end,   -1);
     const yoyStart = shiftYear(start,  -1);
     const yoyEnd   = shiftYear(end,    -1);
     const rangeMonths = monthsInRange(start, end);
-    function catRevenue(s: string, e: string) {
-      const m = new Map<string, number>();
+    function catData(s: string, e: string) {
+      const rev = new Map<string, number>();
+      const qty = new Map<string, number>();
       for (const r of sales.rows) {
         const d = String(r.sold_at || '');
         if (d < s || d > e) continue;
         const prefix = String(r.external_sku || '').slice(0, 5).toUpperCase();
-        m.set(prefix, (m.get(prefix) ?? 0) + (Number(r.revenue) || 0));
+        rev.set(prefix, (rev.get(prefix) ?? 0) + (Number(r.revenue) || 0));
+        qty.set(prefix, (qty.get(prefix) ?? 0) + (Number(r.quantity) || 0));
       }
-      return m;
+      return { rev, qty };
     }
-    const curr = catRevenue(start, end);
-    const prev = catRevenue(momStart, momEnd);
-    const yoy  = catRevenue(yoyStart, yoyEnd);
+    const curr = catData(start, end);
+    const prev = catData(momStart, momEnd);
+    const yoy  = catData(yoyStart, yoyEnd);
+    const totalRev = CAT_LIST.reduce((s, c) => s + (curr.rev.get(c.code) ?? 0), 0);
     return CAT_LIST.map(cat => {
-      const currRev = curr.get(cat.code) ?? 0;
-      const prevRev = prev.get(cat.code) ?? 0;
-      const yoyRev  = yoy.get(cat.code) ?? 0;
-      const target = rangeMonths.reduce((acc, mo) => {
+      const currRev = curr.rev.get(cat.code) ?? 0;
+      const currQty = curr.qty.get(cat.code) ?? 0;
+      const prevRev = prev.rev.get(cat.code) ?? 0;
+      const yoyRev  = yoy.rev.get(cat.code) ?? 0;
+      const target  = rangeMonths.reduce((acc, mo) => {
         const year = parseInt(mo.slice(0, 4));
         const mon  = parseInt(mo.slice(5, 7));
-        return acc + ((year === 2026 ? (MONTHLY_TARGETS_2026[cat.code]?.[mon] ?? 0) : 0));
+        return acc + (year === 2026 ? (MONTHLY_TARGETS_2026[cat.code]?.[mon] ?? 0) : 0);
       }, 0);
-      return { ...cat, currRev, prevRev, yoyRev, target };
-    });
+      const pct = totalRev > 0 ? currRev / totalRev * 100 : 0;
+      return { ...cat, currRev, currQty, prevRev, yoyRev, target, pct };
+    }).sort((a, b) => b.currRev - a.currRev);
   }, [sales.rows, start, end]);
 
   // MOM / YOY 成長率（用於顏色判斷）
@@ -2349,46 +2338,13 @@ function SalesPage() {
       <Summary title="商品業績排行" rows={productRows} />
       <SalesRecordsTable records={records} />
 
-      {/* ── 分類業績合計 ── */}
-      <section className="rounded-xl bg-white p-5 shadow-sm border border-slate-100">
-        <h2 className="mb-4 font-semibold text-ink">分類業績合計</h2>
-        {catSales.every(c => c.revenue === 0) ? (
-          <p className="text-sm text-slate-400">所選期間無分類業績資料。</p>
-        ) : (
-          <div className="space-y-3">
-            {catSales.map(c => (
-              <div key={c.code}>
-                <div className="mb-1 flex items-center justify-between text-sm">
-                  <span className="font-medium text-ink">
-                    <span className="mr-1.5 font-mono text-xs text-slate-400">{c.code}</span>{c.name}
-                  </span>
-                  <div className="flex items-center gap-4 text-right">
-                    <span className="text-xs text-slate-400 tabular-nums">{c.qty.toLocaleString('zh-TW')} 件</span>
-                    <span className="w-28 font-semibold tabular-nums text-ink">{formatCurrency(c.revenue)}</span>
-                    <span className="w-12 text-xs text-slate-500 tabular-nums">{c.pct.toFixed(1)}%</span>
-                  </div>
-                </div>
-                <div className="h-2 w-full rounded-full bg-slate-100">
-                  <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${c.pct}%`, backgroundColor: '#86B926' }} />
-                </div>
-              </div>
-            ))}
-            <div className="mt-3 border-t border-slate-100 pt-3 flex justify-between text-xs text-slate-500">
-              <span>合計 {catSales.reduce((s,c)=>s+c.qty,0).toLocaleString('zh-TW')} 件</span>
-              <span className="font-semibold text-ink">{formatCurrency(catSales.reduce((s,c)=>s+c.revenue,0))}</span>
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* ── 目標達成分析 ── */}
+      {/* ── 分類業績 × 目標達成分析（合併） ── */}
       {(() => {
         const fmtN = (n: number) => Math.round(n).toLocaleString('zh-TW');
         const fmtRate = (curr: number, base: number) => {
           if (base === 0) return <span className="text-slate-300">—</span>;
           const r = (curr - base) / base * 100;
-          const cls = r >= 0 ? 'text-[#86B926]' : 'text-red-500';
-          return <span className={cls}>{r >= 0 ? '↑' : '↓'}{Math.abs(r).toFixed(1)}%</span>;
+          return <span className={r >= 0 ? 'text-[#86B926]' : 'text-red-500'}>{r >= 0 ? '↑' : '↓'}{Math.abs(r).toFixed(1)}%</span>;
         };
         const fmtAch = (curr: number, target: number) => {
           if (target === 0) return <span className="text-slate-300">—</span>;
@@ -2396,51 +2352,61 @@ function SalesPage() {
           const cls = r >= 100 ? 'text-[#86B926] font-semibold' : r >= 80 ? 'text-amber-500 font-semibold' : 'text-red-500 font-semibold';
           return <span className={cls}>{r.toFixed(1)}%</span>;
         };
-        const totalCurr   = targetAnalysis.reduce((s, c) => s + c.currRev, 0);
-        const totalPrev   = targetAnalysis.reduce((s, c) => s + c.prevRev, 0);
-        const totalYoy    = targetAnalysis.reduce((s, c) => s + c.yoyRev, 0);
-        const totalTarget = targetAnalysis.reduce((s, c) => s + c.target, 0);
+        const totalCurr = catAnalysis.reduce((s, c) => s + c.currRev, 0);
+        const totalQty  = catAnalysis.reduce((s, c) => s + c.currQty, 0);
+        const totalPrev = catAnalysis.reduce((s, c) => s + c.prevRev, 0);
+        const totalYoy  = catAnalysis.reduce((s, c) => s + c.yoyRev, 0);
+        const totalTgt  = catAnalysis.reduce((s, c) => s + c.target, 0);
+        const COLS = ['品類','本期業績','數量','占比','上期業績','MoM','去年同期','YoY','本月目標','達成率'];
         return (
           <section className="rounded-xl bg-white shadow-sm border border-slate-100 overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100">
-              <h2 className="font-semibold text-ink">目標達成分析</h2>
-            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ backgroundColor: '#572A87' }}>
-                    {['品類','本期業績','上期業績','MoM','去年同期','YoY','期間目標','目標達成率'].map(h => (
-                      <th key={h} className={`px-4 py-3 text-xs font-semibold text-white ${h === '品類' ? 'text-left' : 'text-right'}`}>{h}</th>
+                    {COLS.map(h => (
+                      <th key={h} className={`px-3 py-3 text-xs font-semibold text-white whitespace-nowrap ${h === '品類' ? 'text-left' : 'text-right'}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {targetAnalysis.map(c => (
+                  {catAnalysis.map(c => (
                     <tr key={c.code} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-4 py-2.5">
-                        <span className="font-mono text-xs text-slate-400 mr-1.5">{c.code}</span>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <span className="font-mono text-xs text-slate-400 mr-1">{c.code}</span>
                         <span className="font-medium text-ink">{c.name}</span>
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtN(c.currRev)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{fmtN(c.prevRev)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtRate(c.currRev, c.prevRev)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{fmtN(c.yoyRev)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtRate(c.currRev, c.yoyRev)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{c.target > 0 ? fmtN(c.target) : <span className="text-slate-300">—</span>}</td>
-                      <td className="px-4 py-2.5 text-right">{fmtAch(c.currRev, c.target)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-medium text-ink">{fmtN(c.currRev)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">{fmtN(c.currQty)}</td>
+                      <td className="px-3 py-2.5 text-right min-w-[80px]">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <div className="w-16 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${c.pct}%`, backgroundColor: '#86B926' }} />
+                          </div>
+                          <span className="text-xs tabular-nums text-slate-500 w-9 text-right">{c.pct.toFixed(1)}%</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-400">{fmtN(c.prevRev)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{fmtRate(c.currRev, c.prevRev)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-400">{fmtN(c.yoyRev)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{fmtRate(c.currRev, c.yoyRev)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-400">{c.target > 0 ? fmtN(c.target) : <span className="text-slate-200">—</span>}</td>
+                      <td className="px-3 py-2.5 text-right">{fmtAch(c.currRev, c.target)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-[#572A87]/20 bg-[#572A87]/5">
-                    <td className="px-4 py-2.5 font-semibold text-[#572A87]">合計</td>
-                    <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-ink">{fmtN(totalCurr)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-500 font-semibold">{fmtN(totalPrev)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{fmtRate(totalCurr, totalPrev)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-500 font-semibold">{fmtN(totalYoy)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{fmtRate(totalCurr, totalYoy)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-500 font-semibold">{totalTarget > 0 ? fmtN(totalTarget) : <span className="text-slate-300">—</span>}</td>
-                    <td className="px-4 py-2.5 text-right">{fmtAch(totalCurr, totalTarget)}</td>
+                    <td className="px-3 py-2.5 font-semibold text-[#572A87]">合計</td>
+                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-ink">{fmtN(totalCurr)}</td>
+                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-500">{fmtN(totalQty)}</td>
+                    <td className="px-3 py-2.5" />
+                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-400">{fmtN(totalPrev)}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{fmtRate(totalCurr, totalPrev)}</td>
+                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-400">{fmtN(totalYoy)}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{fmtRate(totalCurr, totalYoy)}</td>
+                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-400">{totalTgt > 0 ? fmtN(totalTgt) : <span className="text-slate-200">—</span>}</td>
+                    <td className="px-3 py-2.5 text-right">{fmtAch(totalCurr, totalTgt)}</td>
                   </tr>
                 </tfoot>
               </table>
