@@ -997,6 +997,7 @@ function ProductDetailPage() {
   const [editing, setEditing] = useState<Row | null>(null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchData, setBatchData] = useState<Row>({});
   const [batchSaving, setBatchSaving] = useState(false);
@@ -1442,7 +1443,7 @@ function ProductDetailPage() {
                             <img key={i} src={src} alt={`附圖${i + 1}`}
                               className="w-full rounded-md object-contain bg-slate-50 cursor-zoom-in"
                               style={{ maxHeight: imgs.length === 1 ? '160px' : imgs.length === 2 ? '120px' : '100px' }}
-                              onClick={() => window.open(src, '_blank')} />
+                              onClick={() => setLightboxSrc(src)} />
                           ))}
                         </div>
                       );
@@ -1476,6 +1477,18 @@ function ProductDetailPage() {
             ))}
           </div>
         </section>
+      )}
+
+      {/* Lightbox */}
+      {lightboxSrc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          onClick={() => setLightboxSrc(null)}>
+          <button className="absolute right-4 top-4 rounded-full bg-white/20 p-2 text-white hover:bg-white/30"
+            onClick={() => setLightboxSrc(null)}>✕</button>
+          <img src={lightboxSrc} alt="進度附圖"
+            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+            onClick={(e) => e.stopPropagation()} />
+        </div>
       )}
     </Page>
   );
