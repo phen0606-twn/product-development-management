@@ -4641,7 +4641,6 @@ function StatusSummary({ rows }: { rows: Array<{ label: string; products: Row[] 
 
 function SalesRecordsTable({ records }: { records: Row[] }) {
   const [showAll, setShowAll] = useState(false);
-  // Aggregate by SKU across all weeks in the range
   const aggregated = useMemo(() => {
     const map = new Map<string, { label: string; quantity: number; revenue: number }>();
     for (const r of records) {
@@ -4655,12 +4654,30 @@ function SalesRecordsTable({ records }: { records: Row[] }) {
     return [...map.values()].sort((a, b) => b.revenue - a.revenue);
   }, [records]);
   const visible = showAll ? aggregated : aggregated.slice(0, 10);
+  const totalRev = aggregated.reduce((s, x) => s + x.revenue, 0);
+
+  async function exportExcel() {
+    const XLSX = await import('xlsx');
+    const rows = aggregated.map(r => ({
+      '商品': r.label,
+      '數量': r.quantity,
+      '業績金額': r.revenue,
+      '佔比': totalRev ? `${(r.revenue / totalRev * 100).toFixed(1)}%` : '0.0%',
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '銷售明細');
+    XLSX.writeFile(wb, '銷售明細.xlsx');
+  }
+
   return (
     <div className="mt-6">
-      <p className="mb-2 text-sm font-medium text-slate-600">銷售明細（區間加總，共 {aggregated.length} 個品項）</p>
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-sm font-medium text-slate-600">銷售明細（區間加總，共 {aggregated.length} 個品項）</p>
+        <button onClick={exportExcel} className="inline-flex items-center gap-1 rounded-md bg-[#86B926] px-3 py-1.5 text-xs text-white hover:opacity-90">↓ 匯出 Excel</button>
+      </div>
       <Table columns={['商品', '數量', '業績金額', '佔比']}>
         {visible.map((r, i) => {
-          const totalRev = aggregated.reduce((s, x) => s + x.revenue, 0);
           return (
             <tr key={i} className="border-t">
               <td className="p-3">{r.label}</td>
