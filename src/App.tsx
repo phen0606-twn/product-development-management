@@ -1001,6 +1001,8 @@ function ProductDetailPage() {
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchData, setBatchData] = useState<Row>({});
   const [batchSaving, setBatchSaving] = useState(false);
+  const [editingBatch, setEditingBatch] = useState<string | null>(null);
+  const [editBatchData, setEditBatchData] = useState<Row>({});
   const [costOpen, setCostOpen] = useState(false);
   const [costSaveError, setCostSaveError] = useState('');
 
@@ -1043,6 +1045,19 @@ function ProductDetailPage() {
     setBatchOpen(false);
     setBatchData({});
     setBatchSaving(false);
+    batches.reload();
+  }
+
+  async function updateBatch() {
+    if (!editBatchData.name?.trim() || !supabase || !editingBatch) return;
+    await supabase.from('product_batches').update(clean({
+      name: editBatchData.name.trim(),
+      ordered_at: editBatchData.ordered_at || null,
+      quantity: parseNumber(editBatchData.quantity) || null,
+      notes: editBatchData.notes || null,
+    })).eq('id', editingBatch);
+    setEditingBatch(null);
+    setEditBatchData({});
     batches.reload();
   }
 
@@ -1259,7 +1274,12 @@ function ProductDetailPage() {
                 <div key={batch.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
                   <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 bg-slate-50 px-5 py-4">
                     <div>
-                      <p className="font-semibold text-ink">{batch.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-ink">{batch.name}</p>
+                        <button type="button"
+                          onClick={() => { setEditingBatch(batch.id); setEditBatchData({ name: batch.name, ordered_at: batch.ordered_at ?? '', quantity: batch.quantity ?? '', notes: batch.notes ?? '' }); }}
+                          className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100">編輯</button>
+                      </div>
                       <p className="mt-0.5 text-sm text-slate-500">
                         下單日：{batch.ordered_at || '-'}　／　數量：<span className="font-medium text-ink">{qty.toLocaleString('zh-TW')} 件</span>
                       </p>
@@ -1281,6 +1301,29 @@ function ProductDetailPage() {
                       )}
                     </div>
                   </div>
+                  {editingBatch === batch.id && (
+                    <div className="border-b border-slate-100 bg-amber-50/60 px-5 py-4">
+                      <p className="mb-3 text-sm font-medium text-amber-700">編輯批次資料</p>
+                      <div className="grid gap-3 md:grid-cols-4">
+                        <label className="text-sm md:col-span-2">批次名稱（必填）
+                          <input value={editBatchData.name ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, name: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+                        </label>
+                        <label className="text-sm">下單日期
+                          <input type="date" value={editBatchData.ordered_at ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, ordered_at: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+                        </label>
+                        <label className="text-sm">採購數量
+                          <input type="number" value={editBatchData.quantity ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, quantity: e.target.value })} placeholder="件數" className="mt-1 w-full rounded-md border px-3 py-2" />
+                        </label>
+                        <label className="text-sm md:col-span-4">備註
+                          <input value={editBatchData.notes ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+                        </label>
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button type="button" onClick={updateBatch} disabled={!editBatchData.name?.trim()} className="rounded-md bg-sun px-4 py-1.5 text-sm text-white disabled:opacity-40">儲存</button>
+                        <button type="button" onClick={() => setEditingBatch(null)} className="text-sm text-slate-400">取消</button>
+                      </div>
+                    </div>
+                  )}
                   {batchCosts.length === 0 ? (
                     <p className="px-5 py-4 text-sm text-slate-400">此批次尚無費用紀錄，請至費用管理新增。</p>
                   ) : (
