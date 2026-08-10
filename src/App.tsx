@@ -2125,6 +2125,7 @@ function SalesPage() {
     { code: 'AS1SB', name: '遮陽帽' },
     { code: 'AD1DC', name: '夾扇' },
     { code: 'AH1HE', name: '保暖衣物' },
+    { code: 'AB1BZ', name: '其他袋品' },
   ] as const;
   const catAnalysis = useMemo(() => {
     const momStart = shiftMonth(start, -1);
