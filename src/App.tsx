@@ -1,7 +1,7 @@
 import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
-import { BarChart3, Boxes, Copy, DollarSign, LayoutDashboard, LayoutGrid, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { BarChart3, Boxes, Calculator, Copy, DollarSign, LayoutDashboard, LayoutGrid, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
@@ -33,6 +33,7 @@ const nav = [
   ['/inventory', '庫存追蹤', Package, false],
   ['/import', '資料匯入', Upload, true],
   ['/customs', '報關試算', Ship, false],
+  ['/margin', '毛利計算機', Calculator, false],
   ['/allocation', '分貨計算', LayoutGrid, false],
 ] as const;
 
@@ -164,6 +165,7 @@ export default function App() {
           <Route path="/sales-import" element={<Navigate to="/import" replace />} />
           <Route path="/inventory-import" element={<Navigate to="/import" replace />} />
           <Route path="/customs" element={<ErrorBoundary><CustomsCalculationsPage /></ErrorBoundary>} />
+          <Route path="/margin" element={<ErrorBoundary><MarginCalculatorPage /></ErrorBoundary>} />
           <Route path="/allocation" element={<ErrorBoundary><AllocationPage /></ErrorBoundary>} />
         </Routes>
       </main>
@@ -5487,6 +5489,114 @@ type AllocStore = {
   group: 'A' | 'B' | 'C' | 'D';
   qty: number;
 };
+
+function MarginCalculatorPage() {
+  const [rows, setRows] = useState([{ id: 1, label: '', price: '', cost: '' }]);
+  const nextId = () => Math.max(...rows.map(r => r.id)) + 1;
+
+  function update(id: number, field: string, value: string) {
+    setRows(rows.map(r => r.id === id ? { ...r, [field]: value } : r));
+  }
+  function addRow() {
+    setRows([...rows, { id: nextId(), label: '', price: '', cost: '' }]);
+  }
+  function removeRow(id: number) {
+    if (rows.length === 1) return;
+    setRows(rows.filter(r => r.id !== id));
+  }
+
+  return (
+    <Page title="毛利計算機" subtitle="輸入售價與成本，快速試算毛利與毛利率">
+      <div className="space-y-4">
+        {rows.map((row, i) => {
+          const price = parseFloat(row.price) || 0;
+          const cost = parseFloat(row.cost) || 0;
+          const profit = price - cost;
+          const margin = price > 0 ? profit / price * 100 : null;
+          const hasResult = price > 0 && cost > 0;
+          return (
+            <div key={row.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-soft">
+              <div className="mb-4 flex items-center justify-between">
+                <input
+                  value={row.label}
+                  onChange={e => update(row.id, 'label', e.target.value)}
+                  placeholder={`情境 ${i + 1}（選填，例：蝦皮售價）`}
+                  className="w-full max-w-xs rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#572A87]"
+                />
+                {rows.length > 1 && (
+                  <button onClick={() => removeRow(row.id)} className="ml-3 text-slate-300 hover:text-red-400 transition-colors">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="text-sm font-medium text-slate-600">
+                  售價（台幣）
+                  <input
+                    type="number" min="0" value={row.price}
+                    onChange={e => update(row.id, 'price', e.target.value)}
+                    placeholder="0"
+                    className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-base focus:outline-none focus:ring-1 focus:ring-[#572A87]"
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-600">
+                  單位成本（台幣）
+                  <input
+                    type="number" min="0" value={row.cost}
+                    onChange={e => update(row.id, 'cost', e.target.value)}
+                    placeholder="0"
+                    className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-base focus:outline-none focus:ring-1 focus:ring-[#572A87]"
+                  />
+                </label>
+              </div>
+              {hasResult && (
+                <div className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 sm:grid-cols-4">
+                  <div className="rounded-lg bg-slate-50 p-3 text-center">
+                    <p className="text-xs text-slate-500">售價</p>
+                    <p className="mt-1 text-lg font-semibold text-ink">{formatCurrency(price)}</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3 text-center">
+                    <p className="text-xs text-slate-500">單位成本</p>
+                    <p className="mt-1 text-lg font-semibold text-ink">{formatCurrency(cost)}</p>
+                  </div>
+                  <div className={`rounded-lg p-3 text-center ${profit >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
+                    <p className="text-xs text-slate-500">毛利額</p>
+                    <p className={`mt-1 text-lg font-semibold ${profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                      {profit >= 0 ? '' : '-'}{formatCurrency(Math.abs(profit))}
+                    </p>
+                  </div>
+                  <div className={`rounded-lg p-3 text-center ${(margin ?? 0) >= 30 ? 'bg-[#86B926]/10' : (margin ?? 0) >= 0 ? 'bg-amber-50' : 'bg-red-50'}`}>
+                    <p className="text-xs text-slate-500">毛利率</p>
+                    <p className={`mt-1 text-2xl font-bold ${(margin ?? 0) >= 30 ? 'text-[#86B926]' : (margin ?? 0) >= 0 ? 'text-amber-600' : 'text-red-600'}`}>
+                      {margin !== null ? `${margin.toFixed(1)}%` : '-'}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {hasResult && (
+                <div className="mt-2">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={`h-2 rounded-full transition-all ${(margin ?? 0) >= 30 ? 'bg-[#86B926]' : (margin ?? 0) >= 0 ? 'bg-amber-400' : 'bg-red-400'}`}
+                      style={{ width: `${Math.min(100, Math.max(0, margin ?? 0))}%` }}
+                    />
+                  </div>
+                  <div className="mt-1 flex justify-between text-xs text-slate-400">
+                    <span>0%</span><span className="text-slate-300">▲ 30%</span><span>100%</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <button onClick={addRow}
+          className="w-full rounded-xl border border-dashed border-[#C5AAE1] py-3 text-sm text-[#572A87] hover:bg-[#C5AAE1]/10 transition-colors">
+          ＋ 新增情境
+        </button>
+      </div>
+    </Page>
+  );
+}
 
 function AllocationPage() {
   const [period, setPeriod] = useState<'1' | '3' | '6'>('3');
