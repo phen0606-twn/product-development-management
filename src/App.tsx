@@ -1252,8 +1252,8 @@ function ProductDetailPage() {
                           <td className="px-4 py-2.5">{Number(c.bank_fee_twd ?? 0) > 0 ? formatCurrency(c.bank_fee_twd) : '-'}</td>
                           <td className="px-4 py-2.5 font-semibold">{formatCurrency(costTotal(c))}</td>
                           <td className="px-4 py-2.5">
-                            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${c.payment_status === 'paid' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-600'}`}>
-                              {c.payment_status === 'paid' ? '已付款' : '待付款'}
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${!!c.paid_at ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-600'}`}>
+                              {!!c.paid_at ? '已付款' : '待付款'}
                             </span>
                           </td>
                         </tr>
@@ -1269,7 +1269,7 @@ function ProductDetailPage() {
               const directTWD = batchCosts.reduce((s, c) => s + costTotal(c), 0);
               const attrTWD = batchAttrCosts.reduce((s, c) => s + costTotal(c), 0);
               const totalTWD = directTWD + attrTWD;
-              const paidTWD = batchCosts.filter((c) => c.payment_status === 'paid').reduce((s, c) => s + costTotal(c), 0);
+              const paidTWD = batchCosts.filter((c) => !!c.paid_at).reduce((s, c) => s + costTotal(c), 0);
               const qty = Number(batch.quantity) || 0;
               const unitCost = qty > 0 ? totalTWD / qty : 0;
               return (
