@@ -5569,11 +5569,13 @@ function ReorderAlertPage() {
     const threshold = leadDays + safetyDays;
     return sgDailyRate.map(e => {
       const stock = latestBySku.find(inv => inv.external_sku === e.sku)?.quantity ?? 0;
-      const turnoverDays = e.dailyRate > 0 ? Math.round(stock / e.dailyRate) : 9999;
-      const reorderQty = Math.max(0, Math.ceil(e.dailyRate * threshold - stock));
-      return { ...e, stock, turnoverDays, threshold, alert: turnoverDays < threshold, reorderQty };
+      const inTransit = inTransitMap[e.sku] ?? 0;
+      const effectiveStock = stock + inTransit;
+      const turnoverDays = e.dailyRate > 0 ? Math.round(effectiveStock / e.dailyRate) : 9999;
+      const reorderQty = Math.max(0, Math.ceil(e.dailyRate * threshold - effectiveStock));
+      return { ...e, stock, inTransit, turnoverDays, threshold, alert: turnoverDays < threshold, reorderQty };
     }).sort((a, b) => a.turnoverDays - b.turnoverDays);
-  }, [sgDailyRate, latestBySku, leadDays, safetyDays]);
+  }, [sgDailyRate, latestBySku, leadDays, safetyDays, inTransitMap]);
 
   const gbP90 = useMemo(() => {
     const map = new Map<string, number[]>();
@@ -5600,12 +5602,14 @@ function ReorderAlertPage() {
     const rate = sgDailyRate.find(e => e.sku === gbSimSku);
     if (!rate) return null;
     const stock = latestBySku.find(inv => inv.external_sku === gbSimSku)?.quantity ?? 0;
-    const afterStock = stock - qty;
+    const inTransit = inTransitMap[gbSimSku] ?? 0;
+    const effectiveStock = stock + inTransit;
+    const afterStock = effectiveStock - qty;
     const daysAfter = rate.dailyRate > 0 ? Math.round(afterStock / rate.dailyRate) : 9999;
     const needed = leadDays + safetyDays;
     const shortage = Math.max(0, Math.ceil(rate.dailyRate * needed - afterStock));
-    return { stock, afterStock, daysAfter, needed, shortage, ok: daysAfter >= needed };
-  }, [gbSimSku, gbSimQty, sgDailyRate, latestBySku, leadDays, safetyDays]);
+    return { stock, inTransit, effectiveStock, afterStock, daysAfter, needed, shortage, ok: daysAfter >= needed };
+  }, [gbSimSku, gbSimQty, sgDailyRate, latestBySku, leadDays, safetyDays, inTransitMap]);
 
   async function saveGb() {
     if (!supabase || !gbForm.sku || !gbForm.quantity) return;
