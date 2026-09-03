@@ -3434,7 +3434,7 @@ function InventoryPage() {
   const sgAlerts = useMemo(() => {
     const threshold = leadDays + safetyDays;
     return sgDailyRate.map(e => {
-      const stock = latestBySku.get(e.sku)?.quantity ?? 0;
+      const stock = latestBySku.find(inv => inv.external_sku === e.sku)?.quantity ?? 0;
       const turnoverDays = e.dailyRate > 0 ? Math.round(stock / e.dailyRate) : 9999;
       const reorderQty = Math.max(0, Math.ceil(e.dailyRate * threshold - stock));
       return { ...e, stock, turnoverDays, threshold, alert: turnoverDays < threshold, reorderQty };
@@ -3465,7 +3465,7 @@ function InventoryPage() {
     const qty = Number(gbSimQty) || 0;
     const rate = sgDailyRate.find(e => e.sku === gbSimSku);
     if (!rate) return null;
-    const stock = latestBySku.get(gbSimSku)?.quantity ?? 0;
+    const stock = latestBySku.find(inv => inv.external_sku === gbSimSku)?.quantity ?? 0;
     const afterStock = stock - qty;
     const daysAfter = rate.dailyRate > 0 ? Math.round(afterStock / rate.dailyRate) : 9999;
     const needed = leadDays + safetyDays;
