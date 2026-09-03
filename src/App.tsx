@@ -5516,6 +5516,35 @@ function ReorderAlertPage() {
   const [arrivalMap, setArrivalMap] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('inv_arrival') || '{}'); } catch { return {}; }
   });
+
+  // 從 DB 載入在途量 / 到貨日，覆蓋 localStorage 初始值
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.from('reorder_settings').select('*').then(({ data }) => {
+      if (!data) return;
+      const transit: Record<string, number> = {};
+      const arrival: Record<string, string> = {};
+      for (const row of data) {
+        if (row.in_transit_qty) transit[row.sku] = Number(row.in_transit_qty);
+        if (row.arrival_date) arrival[row.sku] = String(row.arrival_date);
+      }
+      setInTransitMap(transit);
+      setArrivalMap(arrival);
+      localStorage.setItem('inv_inTransit', JSON.stringify(transit));
+      localStorage.setItem('inv_arrival', JSON.stringify(arrival));
+    });
+  }, []);
+
+  async function saveReorderSetting(sku: string, inTransit: number, arrival: string) {
+    if (!supabase) return;
+    await supabase.from('reorder_settings').upsert({
+      sku,
+      in_transit_qty: inTransit || 0,
+      arrival_date: arrival || null,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'sku' });
+  }
+
   const [gbOpen, setGbOpen] = useState(false);
   const [gbEditing, setGbEditing] = useState<Row | null>(null);
   const [gbForm, setGbForm] = useState<Row>({});
@@ -5694,6 +5723,10 @@ function ReorderAlertPage() {
                           setInTransitMap(next);
                           localStorage.setItem('inv_inTransit', JSON.stringify(next));
                         }}
+                        onBlur={e => {
+                          const v = e.target.value === '' ? 0 : Number(e.target.value);
+                          saveReorderSetting(r.sku, v, arrivalMap[r.sku] ?? '');
+                        }}
                         className="w-20 rounded border border-slate-200 px-2 py-1 text-right text-sm text-blue-600 focus:border-blue-400 focus:outline-none"
                       />
                     </td>
@@ -5705,6 +5738,7 @@ function ReorderAlertPage() {
                           const next = { ...arrivalMap, [r.sku]: e.target.value };
                           setArrivalMap(next);
                           localStorage.setItem('inv_arrival', JSON.stringify(next));
+                          saveReorderSetting(r.sku, inTransitMap[r.sku] ?? 0, e.target.value);
                         }}
                         className="rounded border border-slate-200 px-2 py-1 text-sm text-blue-600 focus:border-blue-400 focus:outline-none"
                       />
