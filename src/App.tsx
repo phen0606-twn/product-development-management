@@ -5513,6 +5513,9 @@ function ReorderAlertPage() {
   const [inTransitMap, setInTransitMap] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem('inv_inTransit') || '{}'); } catch { return {}; }
   });
+  const [arrivalMap, setArrivalMap] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('inv_arrival') || '{}'); } catch { return {}; }
+  });
   const [gbOpen, setGbOpen] = useState(false);
   const [gbEditing, setGbEditing] = useState<Row | null>(null);
   const [gbForm, setGbForm] = useState<Row>({});
@@ -5691,17 +5694,16 @@ function ReorderAlertPage() {
                       />
                     </td>
                     <td className="py-2.5 pr-4 text-right">
-                      {(() => {
-                        const prodSku = r.sku.slice(0, 9).toUpperCase();
-                        const prod = products.rows.find(p => String(p.sku || '').toUpperCase() === prodSku);
-                        if (!prod) return <span className="text-slate-300">-</span>;
-                        const arrival = batches.rows
-                          .filter(b => b.product_id === prod.id && b.estimated_arrival_date)
-                          .sort((a, b) => String(a.estimated_arrival_date).localeCompare(String(b.estimated_arrival_date)))[0]?.estimated_arrival_date;
-                        return arrival
-                          ? <span className="font-medium text-blue-600">{String(arrival)}</span>
-                          : <span className="text-slate-300">-</span>;
-                      })()}
+                      <input
+                        type="date"
+                        value={arrivalMap[r.sku] ?? ''}
+                        onChange={e => {
+                          const next = { ...arrivalMap, [r.sku]: e.target.value };
+                          setArrivalMap(next);
+                          localStorage.setItem('inv_arrival', JSON.stringify(next));
+                        }}
+                        className="rounded border border-slate-200 px-2 py-1 text-sm text-blue-600 focus:border-blue-400 focus:outline-none"
+                      />
                     </td>
                     <td className="py-2.5 pr-4 text-right text-slate-500">{r.dailyRate.toFixed(1)}</td>
                     <td className={`py-2.5 pr-4 text-right font-semibold ${r.alert ? 'text-red-600' : r.turnoverDays < r.threshold * 1.2 ? 'text-amber-600' : 'text-green-700'}`}>
