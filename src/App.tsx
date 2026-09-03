@@ -5630,7 +5630,7 @@ function ReorderAlertPage() {
       const alert = turnoverDays < threshold;
       const peakAlert = e.peakDailyRate > 0 && peakTurnoverDays < threshold;
       return { ...e, stock, inTransit, effectiveStock, turnoverDays, reorderQty, peakTurnoverDays, peakReorderQty, threshold, alert, peakAlert };
-    }).sort((a, b) => a.turnoverDays - b.turnoverDays);
+    }).sort((a, b) => b.reorderQty - a.reorderQty);
   }, [sgMetrics, latestBySku, leadDays, safetyDays, inTransitMap]);
 
   const gbP90 = useMemo(() => {
