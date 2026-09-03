@@ -5510,6 +5510,9 @@ function ReorderAlertPage() {
 
   const [leadDays, setLeadDays] = useState<number>(() => Number(localStorage.getItem('inv_leadDays') || 70));
   const [safetyDays, setSafetyDays] = useState<number>(() => Number(localStorage.getItem('inv_safetyDays') || 60));
+  const [inTransitMap, setInTransitMap] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(localStorage.getItem('inv_inTransit') || '{}'); } catch { return {}; }
+  });
   const [gbOpen, setGbOpen] = useState(false);
   const [gbEditing, setGbEditing] = useState<Row | null>(null);
   const [gbForm, setGbForm] = useState<Row>({});
@@ -5542,21 +5545,6 @@ function ReorderAlertPage() {
     }
     return d;
   }, [inventory.rows]);
-
-  const sgInTransit = useMemo(() => {
-    const result = new Map<string, number>();
-    for (const b of batches.rows) {
-      const orderedAt = String(b.ordered_at || '').slice(0, 10);
-      if (!orderedAt || (latestSnapshotDate && orderedAt <= latestSnapshotDate)) continue;
-      const prod = products.rows.find((p) => p.id === b.product_id);
-      if (!prod?.sku) continue;
-      const prodSku = String(prod.sku).toUpperCase();
-      if (!prodSku.startsWith('AS1SG')) continue;
-      const qty = Number(b.quantity ?? 0);
-      result.set(prodSku, (result.get(prodSku) ?? 0) + qty);
-    }
-    return result;
-  }, [batches.rows, products.rows, latestSnapshotDate]);
 
   const sgDailyRate = useMemo(() => {
     const cutoff = new Date();
@@ -5687,14 +5675,20 @@ function ReorderAlertPage() {
                     <td className="py-2.5 pr-4 font-mono text-xs">{r.sku}</td>
                     <td className="py-2.5 pr-4 text-slate-700">{r.name}</td>
                     <td className="py-2.5 pr-4 text-right">{r.stock.toLocaleString('zh-TW')}</td>
-                    <td className="py-2.5 pr-4 text-right">
-                      {(() => {
-                        const prodSku = r.sku.slice(0, 9).toUpperCase();
-                        const inTransit = sgInTransit.get(prodSku) ?? 0;
-                        return inTransit > 0
-                          ? <span className="font-medium text-blue-600">{inTransit.toLocaleString('zh-TW')}</span>
-                          : <span className="text-slate-300">-</span>;
-                      })()}
+                    <td className="py-2.5 pr-2 text-right">
+                      <input
+                        type="number"
+                        min="0"
+                        value={inTransitMap[r.sku] ?? ''}
+                        placeholder="0"
+                        onChange={e => {
+                          const v = e.target.value === '' ? 0 : Number(e.target.value);
+                          const next = { ...inTransitMap, [r.sku]: v };
+                          setInTransitMap(next);
+                          localStorage.setItem('inv_inTransit', JSON.stringify(next));
+                        }}
+                        className="w-20 rounded border border-slate-200 px-2 py-1 text-right text-sm text-blue-600 focus:border-blue-400 focus:outline-none"
+                      />
                     </td>
                     <td className="py-2.5 pr-4 text-right">
                       {(() => {
