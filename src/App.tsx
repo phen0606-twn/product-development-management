@@ -5578,33 +5578,60 @@ function ReorderAlertPage() {
     return d;
   }, [inventory.rows]);
 
-  const sgDailyRate = useMemo(() => {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 90);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
-    const map = new Map<string, { sku: string; name: string; qty: number }>();
+  // 全量指標：90天均速、近30天、歷史峰值月、分類標籤
+  const sgMetrics = useMemo(() => {
+    const now = new Date();
+    const d30 = new Date(now); d30.setDate(now.getDate() - 30);
+    const d90 = new Date(now); d90.setDate(now.getDate() - 90);
+    const s30 = d30.toISOString().slice(0, 10);
+    const s90 = d90.toISOString().slice(0, 10);
+
+    const skus = new Map<string, { name: string; qty90: number; qty30: number; monthMap: Map<string, number> }>();
     for (const r of sales.rows) {
       const sku = String(r.external_sku || '');
       if (!sku.toUpperCase().startsWith('AS1SG')) continue;
-      if (String(r.sold_at || '') < cutoffStr) continue;
-      const e = map.get(sku) ?? { sku, name: String(r.external_product_name || sku), qty: 0 };
-      e.qty += Number(r.quantity ?? 0);
-      map.set(sku, e);
+      const soldAt = String(r.sold_at || '').slice(0, 10);
+      const qty = Number(r.quantity ?? 0);
+      const month = soldAt.slice(0, 7);
+      const entry = skus.get(sku) ?? { name: String(r.external_product_name || sku), qty90: 0, qty30: 0, monthMap: new Map() };
+      if (soldAt >= s90) entry.qty90 += qty;
+      if (soldAt >= s30) entry.qty30 += qty;
+      if (month) entry.monthMap.set(month, (entry.monthMap.get(month) ?? 0) + qty);
+      skus.set(sku, entry);
     }
-    return [...map.values()].map(e => ({ ...e, dailyRate: e.qty / 90 }));
+
+    return [...skus.entries()].map(([sku, d]) => {
+      const dailyRate = d.qty90 / 90;
+      const recent30Rate = d.qty30 / 30;
+      let peakQty = 0; let peakMonth = '';
+      for (const [m, q] of d.monthMap) { if (q > peakQty) { peakQty = q; peakMonth = m; } }
+      const peakDailyRate = peakQty / 30;
+      const trendRatio = dailyRate > 0 ? recent30Rate / dailyRate : 1;
+      const peakAvgRatio = dailyRate > 0 ? peakDailyRate / dailyRate : 1;
+      const isExplosive = peakQty >= 400 && peakAvgRatio >= 1.8;
+      const isHot = !isExplosive && trendRatio >= 1.3 && dailyRate >= 0.5;
+      const isCooling = !isExplosive && !isHot && trendRatio <= 0.7;
+      const label: 'explosive' | 'hot' | 'cooling' | 'stable' =
+        isExplosive ? 'explosive' : isHot ? 'hot' : isCooling ? 'cooling' : 'stable';
+      return { sku, name: d.name, dailyRate, recent30Rate, trendRatio, peakQty, peakMonth, peakDailyRate, peakAvgRatio, label };
+    });
   }, [sales.rows]);
 
   const sgAlerts = useMemo(() => {
     const threshold = leadDays + safetyDays;
-    return sgDailyRate.map(e => {
+    return sgMetrics.map(e => {
       const stock = latestBySku.find(inv => inv.external_sku === e.sku)?.quantity ?? 0;
       const inTransit = inTransitMap[e.sku] ?? 0;
       const effectiveStock = stock + inTransit;
       const turnoverDays = e.dailyRate > 0 ? Math.round(effectiveStock / e.dailyRate) : 9999;
       const reorderQty = Math.max(0, Math.ceil(e.dailyRate * threshold - effectiveStock));
-      return { ...e, stock, inTransit, turnoverDays, threshold, alert: turnoverDays < threshold, reorderQty };
+      const peakTurnoverDays = e.peakDailyRate > 0 ? Math.round(effectiveStock / e.peakDailyRate) : 9999;
+      const peakReorderQty = Math.max(0, Math.ceil(e.peakDailyRate * threshold - effectiveStock));
+      const alert = turnoverDays < threshold;
+      const peakAlert = e.peakDailyRate > 0 && peakTurnoverDays < threshold;
+      return { ...e, stock, inTransit, effectiveStock, turnoverDays, reorderQty, peakTurnoverDays, peakReorderQty, threshold, alert, peakAlert };
     }).sort((a, b) => a.turnoverDays - b.turnoverDays);
-  }, [sgDailyRate, latestBySku, leadDays, safetyDays, inTransitMap]);
+  }, [sgMetrics, latestBySku, leadDays, safetyDays, inTransitMap]);
 
   const gbP90 = useMemo(() => {
     const map = new Map<string, number[]>();
@@ -5628,7 +5655,7 @@ function ReorderAlertPage() {
   const simResult = useMemo(() => {
     if (!gbSimSku || !gbSimQty) return null;
     const qty = Number(gbSimQty) || 0;
-    const rate = sgDailyRate.find(e => e.sku === gbSimSku);
+    const rate = sgMetrics.find(e => e.sku === gbSimSku);
     if (!rate) return null;
     const stock = latestBySku.find(inv => inv.external_sku === gbSimSku)?.quantity ?? 0;
     const inTransit = inTransitMap[gbSimSku] ?? 0;
@@ -5638,7 +5665,7 @@ function ReorderAlertPage() {
     const needed = leadDays + safetyDays;
     const shortage = Math.max(0, Math.ceil(rate.dailyRate * needed - afterStock));
     return { stock, inTransit, effectiveStock, afterStock, daysAfter, needed, shortage, ok: daysAfter >= needed };
-  }, [gbSimSku, gbSimQty, sgDailyRate, latestBySku, leadDays, safetyDays, inTransitMap]);
+  }, [gbSimSku, gbSimQty, sgMetrics, latestBySku, leadDays, safetyDays, inTransitMap]);
 
   async function saveGb() {
     if (!supabase || !gbForm.sku || !gbForm.quantity) return;
@@ -5700,8 +5727,11 @@ function ReorderAlertPage() {
                   <th className="pb-2 text-right font-medium">在途量</th>
                   <th className="pb-2 text-right font-medium">預計到貨日</th>
                   <th className="pb-2 text-right font-medium">日均銷量</th>
+                  <th className="pb-2 text-right font-medium">峰值月銷</th>
                   <th className="pb-2 text-right font-medium">週轉天數</th>
+                  <th className="pb-2 text-right font-medium">極端週轉</th>
                   <th className="pb-2 text-right font-medium">建議追貨量</th>
+                  <th className="pb-2 text-right font-medium">極端應備量</th>
                   <th className="pb-2 text-center font-medium">狀態</th>
                 </tr>
               </thead>
@@ -5709,7 +5739,14 @@ function ReorderAlertPage() {
                 {sgAlerts.map(r => (
                   <tr key={r.sku} className={`border-t ${r.alert ? 'bg-red-50' : ''}`}>
                     <td className="py-2.5 pr-4 font-mono text-xs">{r.sku}</td>
-                    <td className="py-2.5 pr-4 text-slate-700">{r.name}</td>
+                    <td className="py-2.5 pr-4">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-slate-700">{r.name}</span>
+                        {r.label === 'explosive' && <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">🔥 爆品</span>}
+                        {r.label === 'hot' && <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">⬆ 熱賣</span>}
+                        {r.label === 'cooling' && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">⬇ 降溫</span>}
+                      </div>
+                    </td>
                     <td className="py-2.5 pr-4 text-right">{r.stock.toLocaleString('zh-TW')}</td>
                     <td className="py-2.5 pr-2 text-right">
                       <input
@@ -5743,11 +5780,29 @@ function ReorderAlertPage() {
                         className="rounded border border-slate-200 px-2 py-1 text-sm text-blue-600 focus:border-blue-400 focus:outline-none"
                       />
                     </td>
-                    <td className="py-2.5 pr-4 text-right text-slate-500">{r.dailyRate.toFixed(1)}</td>
+                    <td className="py-2.5 pr-4 text-right">
+                      <span className="text-slate-500">{r.dailyRate.toFixed(1)}</span>
+                      {r.trendRatio >= 1.3 && <span className="ml-1 text-xs text-green-600">▲{(r.recent30Rate).toFixed(1)}</span>}
+                      {r.trendRatio <= 0.7 && <span className="ml-1 text-xs text-slate-400">▼{(r.recent30Rate).toFixed(1)}</span>}
+                    </td>
+                    <td className="py-2.5 pr-4 text-right">
+                      {r.peakQty > 0
+                        ? <div>
+                            <span className={`font-medium ${r.label === 'explosive' ? 'text-orange-600' : 'text-slate-600'}`}>{r.peakQty.toLocaleString('zh-TW')}</span>
+                            <span className="ml-1 text-xs text-slate-400">{r.peakMonth}</span>
+                          </div>
+                        : <span className="text-slate-300">-</span>}
+                    </td>
                     <td className={`py-2.5 pr-4 text-right font-semibold ${r.alert ? 'text-red-600' : r.turnoverDays < r.threshold * 1.2 ? 'text-amber-600' : 'text-green-700'}`}>
                       {r.turnoverDays >= 9999 ? '∞' : `${r.turnoverDays} 天`}
                     </td>
+                    <td className={`py-2.5 pr-4 text-right font-semibold ${r.peakDailyRate > 0 && r.peakAlert ? 'text-red-600' : r.peakDailyRate > 0 && r.peakTurnoverDays < r.threshold * 1.2 ? 'text-amber-600' : 'text-slate-400'}`}>
+                      {r.peakDailyRate > 0 ? (r.peakTurnoverDays >= 9999 ? '∞' : `${r.peakTurnoverDays} 天`) : '-'}
+                    </td>
                     <td className="py-2.5 pr-4 text-right">{r.alert && r.reorderQty > 0 ? `${r.reorderQty.toLocaleString('zh-TW')} 件` : '-'}</td>
+                    <td className={`py-2.5 pr-4 text-right ${r.peakAlert && r.peakReorderQty > 0 ? 'font-semibold text-orange-600' : 'text-slate-400'}`}>
+                      {r.peakDailyRate > 0 && r.peakReorderQty > 0 ? `${r.peakReorderQty.toLocaleString('zh-TW')} 件` : '-'}
+                    </td>
                     <td className="py-2.5 text-center">
                       {r.alert
                         ? <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">⚠ 需追貨</span>
