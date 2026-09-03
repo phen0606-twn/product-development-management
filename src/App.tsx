@@ -5502,7 +5502,6 @@ type AllocStore = {
 };
 
 function ReorderAlertPage() {
-  const { supabase } = useAuth();
   const inventory = useRows('inventory_records', 'recorded_at');
   const sales = useRows('sales_records', 'sold_at');
   const products = useRows('products', 'created_at');
