@@ -2959,6 +2959,7 @@ function InventoryPage() {
   const skuCosts = useRows('sku_costs', 'external_sku');
   const productStoreSales = useRows('product_store_sales', 'sales_month');
   const groupBuys = useRows('group_buy_records', 'event_date');
+  const batches = useRows('product_batches', 'ordered_at');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -3415,6 +3416,22 @@ function InventoryPage() {
   }
 
   // ── 太陽眼鏡追貨警示 ────────────────────────────────────────────
+  // 在途量：快照日期後下單的批次，按 product.sku 前綴對應到 external_sku
+  const sgInTransit = useMemo(() => {
+    const result = new Map<string, number>();
+    for (const b of batches.rows) {
+      const orderedAt = String(b.ordered_at || '').slice(0, 10);
+      if (!orderedAt || (latestSnapshotDate && orderedAt <= latestSnapshotDate)) continue;
+      const prod = products.rows.find((p) => p.id === b.product_id);
+      if (!prod?.sku) continue;
+      const prodSku = String(prod.sku).toUpperCase();
+      if (!prodSku.startsWith('AS1SG')) continue;
+      const qty = Number(b.quantity ?? 0);
+      result.set(prodSku, (result.get(prodSku) ?? 0) + qty);
+    }
+    return result;
+  }, [batches.rows, products.rows, latestSnapshotDate]);
+
   const sgDailyRate = useMemo(() => {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 90);
@@ -4116,6 +4133,7 @@ function InventoryPage() {
                   <th className="pb-2 text-left font-medium">SKU</th>
                   <th className="pb-2 text-left font-medium">品名</th>
                   <th className="pb-2 text-right font-medium">庫存量</th>
+                  <th className="pb-2 text-right font-medium">在途量</th>
                   <th className="pb-2 text-right font-medium">日均銷量</th>
                   <th className="pb-2 text-right font-medium">週轉天數</th>
                   <th className="pb-2 text-right font-medium">建議追貨量</th>
@@ -4128,6 +4146,15 @@ function InventoryPage() {
                     <td className="py-2.5 pr-4 font-mono text-xs">{r.sku}</td>
                     <td className="py-2.5 pr-4 text-slate-700">{r.name}</td>
                     <td className="py-2.5 pr-4 text-right">{r.stock.toLocaleString('zh-TW')}</td>
+                    <td className="py-2.5 pr-4 text-right">
+                      {(() => {
+                        const prodSku = r.sku.slice(0, 9).toUpperCase();
+                        const inTransit = sgInTransit.get(prodSku) ?? 0;
+                        return inTransit > 0
+                          ? <span className="font-medium text-blue-600">{inTransit.toLocaleString('zh-TW')}</span>
+                          : <span className="text-slate-300">-</span>;
+                      })()}
+                    </td>
                     <td className="py-2.5 pr-4 text-right text-slate-500">{r.dailyRate.toFixed(1)}</td>
                     <td className={`py-2.5 pr-4 text-right font-semibold ${r.alert ? 'text-red-600' : r.turnoverDays < r.threshold * 1.2 ? 'text-amber-600' : 'text-green-700'}`}>
                       {r.turnoverDays >= 9999 ? '∞' : `${r.turnoverDays} 天`}
