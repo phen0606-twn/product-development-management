@@ -2958,6 +2958,7 @@ function InventoryPage() {
   const products = useRows('products', 'created_at');
   const skuCosts = useRows('sku_costs', 'external_sku');
   const productStoreSales = useRows('product_store_sales', 'sales_month');
+  const groupBuys = useRows('group_buy_records', 'event_date');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Row | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -2972,6 +2973,16 @@ function InventoryPage() {
   const [storeQuery, setStoreQuery] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
   const [selectedTrendStore, setSelectedTrendStore] = useState<string | null>(null);
+  // 追貨警示參數 (localStorage)
+  const [leadDays, setLeadDays] = useState<number>(() => Number(localStorage.getItem('inv_leadDays') || 70));
+  const [safetyDays, setSafetyDays] = useState<number>(() => Number(localStorage.getItem('inv_safetyDays') || 60));
+  // 團購歷史 CRUD
+  const [gbOpen, setGbOpen] = useState(false);
+  const [gbEditing, setGbEditing] = useState<Row | null>(null);
+  const [gbForm, setGbForm] = useState<Row>({});
+  // 團購前試算
+  const [gbSimSku, setGbSimSku] = useState('');
+  const [gbSimQty, setGbSimQty] = useState('');
 
   const availableMonths = useMemo(
     () => [...new Set(sales.rows.map((r) => String(r.sold_at).slice(0, 7)).filter(Boolean))].sort().reverse(),
@@ -3401,6 +3412,89 @@ function InventoryPage() {
     if (!supabase || !confirm('確定刪除此庫存紀錄？')) return;
     await supabase.from('inventory_records').delete().eq('id', id);
     inventory.reload();
+  }
+
+  // ── 太陽眼鏡追貨警示 ────────────────────────────────────────────
+  const sgDailyRate = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const map = new Map<string, { sku: string; name: string; qty: number }>();
+    for (const r of sales.rows) {
+      const sku = String(r.external_sku || '');
+      if (!sku.toUpperCase().startsWith('AS1SG')) continue;
+      if (String(r.sold_at || '') < cutoffStr) continue;
+      const e = map.get(sku) ?? { sku, name: String(r.external_product_name || sku), qty: 0 };
+      e.qty += Number(r.quantity ?? 0);
+      map.set(sku, e);
+    }
+    return [...map.values()].map(e => ({ ...e, dailyRate: e.qty / 90 }));
+  }, [sales.rows]);
+
+  const sgAlerts = useMemo(() => {
+    const threshold = leadDays + safetyDays;
+    return sgDailyRate.map(e => {
+      const stock = latestBySku.get(e.sku)?.quantity ?? 0;
+      const turnoverDays = e.dailyRate > 0 ? Math.round(stock / e.dailyRate) : 9999;
+      const reorderQty = Math.max(0, Math.ceil(e.dailyRate * threshold - stock));
+      return { ...e, stock, turnoverDays, threshold, alert: turnoverDays < threshold, reorderQty };
+    }).sort((a, b) => a.turnoverDays - b.turnoverDays);
+  }, [sgDailyRate, latestBySku, leadDays, safetyDays]);
+
+  const gbP90 = useMemo(() => {
+    const map = new Map<string, number[]>();
+    for (const r of groupBuys.rows) {
+      const sku = String(r.sku || '');
+      const qty = Number(r.quantity ?? 0);
+      if (!sku || qty <= 0) continue;
+      const arr = map.get(sku) ?? [];
+      arr.push(qty);
+      map.set(sku, arr);
+    }
+    const result = new Map<string, number>();
+    for (const [sku, arr] of map) {
+      arr.sort((a, b) => a - b);
+      const idx = Math.max(0, Math.ceil(arr.length * 0.9) - 1);
+      result.set(sku, arr[idx]);
+    }
+    return result;
+  }, [groupBuys.rows]);
+
+  const simResult = useMemo(() => {
+    if (!gbSimSku || !gbSimQty) return null;
+    const qty = Number(gbSimQty) || 0;
+    const rate = sgDailyRate.find(e => e.sku === gbSimSku);
+    if (!rate) return null;
+    const stock = latestBySku.get(gbSimSku)?.quantity ?? 0;
+    const afterStock = stock - qty;
+    const daysAfter = rate.dailyRate > 0 ? Math.round(afterStock / rate.dailyRate) : 9999;
+    const needed = leadDays + safetyDays;
+    const shortage = Math.max(0, Math.ceil(rate.dailyRate * needed - afterStock));
+    return { stock, afterStock, daysAfter, needed, shortage, ok: daysAfter >= needed };
+  }, [gbSimSku, gbSimQty, sgDailyRate, latestBySku, leadDays, safetyDays]);
+
+  async function saveGb() {
+    if (!supabase || !gbForm.sku || !gbForm.quantity) return;
+    const payload = {
+      sku: String(gbForm.sku).trim().toUpperCase(),
+      product_name: gbForm.product_name || null,
+      event_name: gbForm.event_name || null,
+      event_date: gbForm.event_date || null,
+      quantity: Number(gbForm.quantity),
+      notes: gbForm.notes || null,
+    };
+    if (gbEditing?.id) {
+      await supabase.from('group_buy_records').update(payload).eq('id', gbEditing.id);
+    } else {
+      await supabase.from('group_buy_records').insert(payload);
+    }
+    setGbOpen(false); setGbEditing(null); setGbForm({}); groupBuys.reload();
+  }
+
+  async function deleteGb(id: string) {
+    if (!supabase || !confirm('確定刪除這筆團購記錄？')) return;
+    await supabase.from('group_buy_records').delete().eq('id', id);
+    groupBuys.reload();
   }
 
   return (
@@ -3990,6 +4084,208 @@ function InventoryPage() {
           )}
         </section>
       )}
+
+      {/* ── 太陽眼鏡追貨警示 ─────────────────────────────────────────── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-ink">太陽眼鏡追貨警示</h3>
+            <p className="mt-0.5 text-xs text-slate-400">以近 90 天銷量計算日均銷量，週轉天數低於門檻時顯示警示</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <label className="flex items-center gap-2 text-slate-600">前置時間
+              <input type="number" min="1" value={leadDays}
+                onChange={e => { const v = Number(e.target.value); setLeadDays(v); localStorage.setItem('inv_leadDays', String(v)); }}
+                className="w-16 rounded-md border border-slate-200 px-2 py-1 text-center text-ink" />天
+            </label>
+            <label className="flex items-center gap-2 text-slate-600">安全緩衝
+              <input type="number" min="1" value={safetyDays}
+                onChange={e => { const v = Number(e.target.value); setSafetyDays(v); localStorage.setItem('inv_safetyDays', String(v)); }}
+                className="w-16 rounded-md border border-slate-200 px-2 py-1 text-center text-ink" />天
+            </label>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">門檻 {leadDays + safetyDays} 天</span>
+          </div>
+        </div>
+        {sgAlerts.length === 0 ? (
+          <p className="text-sm text-slate-400">近 90 天內無 AS1SG* 太陽眼鏡銷售資料</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-xs text-slate-400">
+                  <th className="pb-2 text-left font-medium">SKU</th>
+                  <th className="pb-2 text-left font-medium">品名</th>
+                  <th className="pb-2 text-right font-medium">庫存量</th>
+                  <th className="pb-2 text-right font-medium">日均銷量</th>
+                  <th className="pb-2 text-right font-medium">週轉天數</th>
+                  <th className="pb-2 text-right font-medium">建議追貨量</th>
+                  <th className="pb-2 text-center font-medium">狀態</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sgAlerts.map(r => (
+                  <tr key={r.sku} className={`border-t ${r.alert ? 'bg-red-50' : ''}`}>
+                    <td className="py-2.5 pr-4 font-mono text-xs">{r.sku}</td>
+                    <td className="py-2.5 pr-4 text-slate-700">{r.name}</td>
+                    <td className="py-2.5 pr-4 text-right">{r.stock.toLocaleString('zh-TW')}</td>
+                    <td className="py-2.5 pr-4 text-right text-slate-500">{r.dailyRate.toFixed(1)}</td>
+                    <td className={`py-2.5 pr-4 text-right font-semibold ${r.alert ? 'text-red-600' : r.turnoverDays < r.threshold * 1.2 ? 'text-amber-600' : 'text-green-700'}`}>
+                      {r.turnoverDays >= 9999 ? '∞' : `${r.turnoverDays} 天`}
+                    </td>
+                    <td className="py-2.5 pr-4 text-right">{r.alert && r.reorderQty > 0 ? `${r.reorderQty.toLocaleString('zh-TW')} 件` : '-'}</td>
+                    <td className="py-2.5 text-center">
+                      {r.alert
+                        ? <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">⚠ 需追貨</span>
+                        : r.turnoverDays < r.threshold * 1.2
+                          ? <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">留意</span>
+                          : <span className="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">正常</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* ── 團購前試算 ───────────────────────────────────────────────── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-1 font-semibold text-ink">團購前試算</h3>
+        <p className="mb-4 text-xs text-slate-400">輸入預估團購量，試算扣除後庫存能否撐到下批貨到</p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm text-slate-600">選擇品項
+            <select value={gbSimSku} onChange={e => setGbSimSku(e.target.value)}
+              className="mt-1 block rounded-md border border-slate-200 px-3 py-2 text-sm">
+              <option value="">請選擇</option>
+              {sgAlerts.map(r => <option key={r.sku} value={r.sku}>{r.sku} {r.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm text-slate-600">預估團購量（件）
+            <input type="number" min="0" value={gbSimQty} onChange={e => setGbSimQty(e.target.value)}
+              placeholder="0"
+              className="mt-1 block w-32 rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          </label>
+        </div>
+        {simResult && (
+          <div className={`mt-4 rounded-lg border p-4 ${simResult.ok ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+            <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+              <div><p className="text-xs text-slate-500">目前庫存</p><p className="mt-0.5 font-semibold">{simResult.stock.toLocaleString('zh-TW')} 件</p></div>
+              <div><p className="text-xs text-slate-500">扣除後庫存</p><p className={`mt-0.5 font-semibold ${simResult.afterStock < 0 ? 'text-red-600' : ''}`}>{simResult.afterStock.toLocaleString('zh-TW')} 件</p></div>
+              <div><p className="text-xs text-slate-500">剩餘週轉天數</p><p className={`mt-0.5 font-semibold ${simResult.ok ? 'text-green-700' : 'text-red-600'}`}>{simResult.daysAfter >= 9999 ? '∞' : `${simResult.daysAfter} 天`}</p></div>
+              <div><p className="text-xs text-slate-500">需撐天數（門檻）</p><p className="mt-0.5 font-semibold">{simResult.needed} 天</p></div>
+            </div>
+            <p className={`mt-3 text-sm font-medium ${simResult.ok ? 'text-green-700' : 'text-red-700'}`}>
+              {simResult.ok
+                ? `✓ 庫存充足，團購後仍可撐 ${simResult.daysAfter} 天（高於門檻 ${simResult.needed} 天）`
+                : `✗ 庫存不足！扣除後還缺 ${simResult.shortage.toLocaleString('zh-TW')} 件才能撐到下批貨到`}
+            </p>
+          </div>
+        )}
+      </section>
+
+      {/* ── 團購歷史紀錄 ─────────────────────────────────────────────── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-ink">團購歷史紀錄</h3>
+            <p className="mt-0.5 text-xs text-slate-400">記錄每檔團購實際賣出量，用於計算 P90 備用庫存基準</p>
+          </div>
+          <button onClick={() => { setGbOpen(true); setGbEditing(null); setGbForm({}); }}
+            className="rounded-md bg-sun px-3 py-1.5 text-sm text-white hover:opacity-90">＋ 新增</button>
+        </div>
+        {gbOpen && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <p className="mb-3 text-sm font-medium text-amber-700">{gbEditing ? '編輯團購記錄' : '新增團購記錄'}</p>
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="text-sm">SKU（必填）
+                <input value={gbForm.sku ?? ''} onChange={e => setGbForm({ ...gbForm, sku: e.target.value })}
+                  placeholder="AS1SG0001BK1" className="mt-1 w-full rounded-md border px-3 py-2 text-sm uppercase" />
+              </label>
+              <label className="text-sm">品名
+                <input value={gbForm.product_name ?? ''} onChange={e => setGbForm({ ...gbForm, product_name: e.target.value })}
+                  className="mt-1 w-full rounded-md border px-3 py-2 text-sm" />
+              </label>
+              <label className="text-sm">活動名稱
+                <input value={gbForm.event_name ?? ''} onChange={e => setGbForm({ ...gbForm, event_name: e.target.value })}
+                  placeholder="例：大紅哥 7月團" className="mt-1 w-full rounded-md border px-3 py-2 text-sm" />
+              </label>
+              <label className="text-sm">活動日期
+                <input type="date" value={gbForm.event_date ?? ''} onChange={e => setGbForm({ ...gbForm, event_date: e.target.value })}
+                  className="mt-1 w-full rounded-md border px-3 py-2 text-sm" />
+              </label>
+              <label className="text-sm">銷售數量（必填）
+                <input type="number" min="1" value={gbForm.quantity ?? ''} onChange={e => setGbForm({ ...gbForm, quantity: e.target.value })}
+                  placeholder="件數" className="mt-1 w-full rounded-md border px-3 py-2 text-sm" />
+              </label>
+              <label className="text-sm">備註
+                <input value={gbForm.notes ?? ''} onChange={e => setGbForm({ ...gbForm, notes: e.target.value })}
+                  className="mt-1 w-full rounded-md border px-3 py-2 text-sm" />
+              </label>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button onClick={saveGb} disabled={!gbForm.sku || !gbForm.quantity}
+                className="rounded-md bg-sun px-4 py-1.5 text-sm text-white disabled:opacity-40">儲存</button>
+              <button onClick={() => { setGbOpen(false); setGbEditing(null); setGbForm({}); }} className="text-sm text-slate-400">取消</button>
+            </div>
+          </div>
+        )}
+        {groupBuys.rows.length === 0 ? (
+          <p className="text-sm text-slate-400">尚無團購記錄，請新增歷史資料</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-xs text-slate-400">
+                  <th className="pb-2 text-left font-medium">日期</th>
+                  <th className="pb-2 text-left font-medium">SKU</th>
+                  <th className="pb-2 text-left font-medium">品名</th>
+                  <th className="pb-2 text-left font-medium">活動名稱</th>
+                  <th className="pb-2 text-right font-medium">數量</th>
+                  <th className="pb-2 text-right font-medium">P90 備用量</th>
+                  <th className="pb-2 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...groupBuys.rows].sort((a, b) => String(b.event_date || '').localeCompare(String(a.event_date || ''))).map(r => (
+                  <tr key={r.id} className="border-t">
+                    <td className="py-2.5 pr-4 text-slate-500">{String(r.event_date || '-')}</td>
+                    <td className="py-2.5 pr-4 font-mono text-xs">{r.sku}</td>
+                    <td className="py-2.5 pr-4 text-slate-600">{r.product_name || '-'}</td>
+                    <td className="py-2.5 pr-4 text-slate-600">{r.event_name || '-'}</td>
+                    <td className="py-2.5 pr-4 text-right font-semibold">{Number(r.quantity).toLocaleString('zh-TW')}</td>
+                    <td className="py-2.5 pr-4 text-right">
+                      {gbP90.has(String(r.sku))
+                        ? <span className="rounded-full bg-[#C5AAE1]/30 px-2 py-0.5 text-xs font-semibold text-[#572A87]">{gbP90.get(String(r.sku))!.toLocaleString('zh-TW')} 件</span>
+                        : '-'}
+                    </td>
+                    <td className="py-2.5">
+                      <div className="flex gap-1">
+                        <button onClick={() => { setGbEditing(r); setGbForm({ ...r }); setGbOpen(true); }}
+                          className="rounded border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50"><Pencil className="h-3 w-3" /></button>
+                        <button onClick={() => deleteGb(String(r.id))}
+                          className="rounded border border-slate-200 p-1.5 text-coral hover:bg-red-50"><Trash2 className="h-3 w-3" /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {gbP90.size > 0 && (
+          <div className="mt-4 rounded-lg bg-[#572A87]/5 p-3">
+            <p className="mb-2 text-xs font-semibold text-[#572A87]">各 SKU 建議團購備用庫存（P90）</p>
+            <div className="flex flex-wrap gap-3">
+              {[...gbP90.entries()].map(([sku, qty]) => (
+                <div key={sku} className="rounded-lg border border-[#C5AAE1] bg-white px-3 py-2 text-sm">
+                  <p className="font-mono text-xs text-slate-500">{sku}</p>
+                  <p className="font-bold text-[#572A87]">{qty.toLocaleString('zh-TW')} 件</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
     </Page>
   );
 }
