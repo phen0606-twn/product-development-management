@@ -5619,7 +5619,19 @@ function ReorderAlertPage() {
 
   const sgAlerts = useMemo(() => {
     const threshold = leadDays + safetyDays;
-    return sgMetrics.map(e => {
+    const metricsSkus = new Set(sgMetrics.map(e => e.sku));
+
+    // 補入有庫存但無銷售紀錄的 AS1SG* 新品
+    const newProductEntries = latestBySku
+      .filter(inv => String(inv.external_sku).toUpperCase().startsWith('AS1SG') && !metricsSkus.has(inv.external_sku))
+      .map(inv => {
+        const prodSku = String(inv.external_sku).slice(0, 9).toUpperCase();
+        const prod = products.rows.find(p => String(p.sku || '').toUpperCase() === prodSku);
+        const name = prod?.name ? `${inv.external_sku} ${prod.name}` : inv.external_sku;
+        return { sku: inv.external_sku, name, dailyRate: 0, recent30Rate: 0, trendRatio: 1, peakQty: 0, peakMonth: '', peakDailyRate: 0, peakAvgRatio: 1, label: 'stable' as const };
+      });
+
+    return [...sgMetrics, ...newProductEntries].map(e => {
       const stock = latestBySku.find(inv => inv.external_sku === e.sku)?.quantity ?? 0;
       const inTransit = inTransitMap[e.sku] ?? 0;
       const effectiveStock = stock + inTransit;
@@ -5627,7 +5639,7 @@ function ReorderAlertPage() {
       const reorderQty = Math.max(0, Math.ceil(e.dailyRate * threshold - effectiveStock));
       const peakTurnoverDays = e.peakDailyRate > 0 ? Math.round(effectiveStock / e.peakDailyRate) : 9999;
       const peakReorderQty = Math.max(0, Math.ceil(e.peakDailyRate * threshold - effectiveStock));
-      const alert = turnoverDays < threshold;
+      const alert = e.dailyRate > 0 && turnoverDays < threshold;
       const peakAlert = e.peakDailyRate > 0 && peakTurnoverDays < threshold;
       return { ...e, stock, inTransit, effectiveStock, turnoverDays, reorderQty, peakTurnoverDays, peakReorderQty, threshold, alert, peakAlert };
     }).sort((a, b) => b.reorderQty - a.reorderQty);
