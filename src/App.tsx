@@ -5721,7 +5721,6 @@ function ReorderAlertPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 text-xs text-slate-400">
-                  <th className="pb-2 text-left font-medium">SKU</th>
                   <th className="pb-2 text-left font-medium">品名</th>
                   <th className="pb-2 text-right font-medium">庫存量</th>
                   <th className="pb-2 text-right font-medium">在途量</th>
@@ -5738,7 +5737,6 @@ function ReorderAlertPage() {
               <tbody>
                 {sgAlerts.map(r => (
                   <tr key={r.sku} className={`border-t ${r.alert ? 'bg-red-50' : ''}`}>
-                    <td className="py-2.5 pr-4 font-mono text-xs">{r.sku}</td>
                     <td className="py-2.5 pr-4">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="text-slate-700">{r.name}</span>
