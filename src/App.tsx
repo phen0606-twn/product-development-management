@@ -1042,6 +1042,7 @@ function ProductDetailPage() {
       name: batchData.name.trim(),
       ordered_at: batchData.ordered_at || null,
       quantity: parseNumber(batchData.quantity) || null,
+      estimated_arrival_date: batchData.estimated_arrival_date || null,
       notes: batchData.notes || null,
     }));
     setBatchOpen(false);
@@ -1056,6 +1057,7 @@ function ProductDetailPage() {
       name: editBatchData.name.trim(),
       ordered_at: editBatchData.ordered_at || null,
       quantity: parseNumber(editBatchData.quantity) || null,
+      estimated_arrival_date: editBatchData.estimated_arrival_date || null,
       notes: editBatchData.notes || null,
     })).eq('id', editingBatch);
     setEditingBatch(null);
@@ -1201,6 +1203,9 @@ function ProductDetailPage() {
               <label className="text-sm">採購數量
                 <input type="number" value={batchData.quantity ?? ''} onChange={(e) => setBatchData({ ...batchData, quantity: e.target.value })} placeholder="件數" className="mt-1 w-full rounded-md border px-3 py-2" />
               </label>
+              <label className="text-sm">預計到貨日
+                <input type="date" value={batchData.estimated_arrival_date ?? ''} onChange={(e) => setBatchData({ ...batchData, estimated_arrival_date: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+              </label>
               <label className="text-sm md:col-span-4">備註
                 <input value={batchData.notes ?? ''} onChange={(e) => setBatchData({ ...batchData, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
               </label>
@@ -1284,6 +1289,7 @@ function ProductDetailPage() {
                       </div>
                       <p className="mt-0.5 text-sm text-slate-500">
                         下單日：{batch.ordered_at || '-'}　／　數量：<span className="font-medium text-ink">{qty.toLocaleString('zh-TW')} 件</span>
+                        {batch.estimated_arrival_date && <span>　／　預計到貨：<span className="font-medium text-blue-600">{batch.estimated_arrival_date}</span></span>}
                       </p>
                       {batch.notes && <p className="mt-1 text-xs text-slate-400">{batch.notes}</p>}
                     </div>
@@ -1315,6 +1321,9 @@ function ProductDetailPage() {
                         </label>
                         <label className="text-sm">採購數量
                           <input type="number" value={editBatchData.quantity ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, quantity: e.target.value })} placeholder="件數" className="mt-1 w-full rounded-md border px-3 py-2" />
+                        </label>
+                        <label className="text-sm">預計到貨日
+                          <input type="date" value={editBatchData.estimated_arrival_date ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, estimated_arrival_date: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
                         </label>
                         <label className="text-sm md:col-span-4">備註
                           <input value={editBatchData.notes ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
@@ -4134,6 +4143,7 @@ function InventoryPage() {
                   <th className="pb-2 text-left font-medium">品名</th>
                   <th className="pb-2 text-right font-medium">庫存量</th>
                   <th className="pb-2 text-right font-medium">在途量</th>
+                  <th className="pb-2 text-right font-medium">預計到貨日</th>
                   <th className="pb-2 text-right font-medium">日均銷量</th>
                   <th className="pb-2 text-right font-medium">週轉天數</th>
                   <th className="pb-2 text-right font-medium">建議追貨量</th>
@@ -4152,6 +4162,19 @@ function InventoryPage() {
                         const inTransit = sgInTransit.get(prodSku) ?? 0;
                         return inTransit > 0
                           ? <span className="font-medium text-blue-600">{inTransit.toLocaleString('zh-TW')}</span>
+                          : <span className="text-slate-300">-</span>;
+                      })()}
+                    </td>
+                    <td className="py-2.5 pr-4 text-right">
+                      {(() => {
+                        const prodSku = r.sku.slice(0, 9).toUpperCase();
+                        const prod = products.rows.find(p => String(p.sku || '').toUpperCase() === prodSku);
+                        if (!prod) return <span className="text-slate-300">-</span>;
+                        const arrival = batches.rows
+                          .filter(b => b.product_id === prod.id && b.estimated_arrival_date)
+                          .sort((a, b) => String(a.estimated_arrival_date).localeCompare(String(b.estimated_arrival_date)))[0]?.estimated_arrival_date;
+                        return arrival
+                          ? <span className="font-medium text-blue-600">{String(arrival)}</span>
                           : <span className="text-slate-300">-</span>;
                       })()}
                     </td>
