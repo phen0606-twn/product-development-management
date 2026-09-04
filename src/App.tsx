@@ -5971,14 +5971,14 @@ function ReorderAlertPage() {
 }
 
 function MarginCalculatorPage() {
-  const [rows, setRows] = useState([{ id: 1, label: '', price: '', cost: '' }]);
+  const [rows, setRows] = useState([{ id: 1, productName: '', label: '', price: '', cost: '' }]);
   const nextId = () => Math.max(...rows.map(r => r.id)) + 1;
 
   function update(id: number, field: string, value: string) {
     setRows(rows.map(r => r.id === id ? { ...r, [field]: value } : r));
   }
   function addRow() {
-    setRows([...rows, { id: nextId(), label: '', price: '', cost: '' }]);
+    setRows([...rows, { id: nextId(), productName: '', label: '', price: '', cost: '' }]);
   }
   function removeRow(id: number) {
     if (rows.length === 1) return;
@@ -5996,15 +5996,21 @@ function MarginCalculatorPage() {
           const hasResult = price > 0 && cost > 0;
           return (
             <div key={row.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-soft">
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-4 flex items-center gap-3">
+                <input
+                  value={row.productName}
+                  onChange={e => update(row.id, 'productName', e.target.value)}
+                  placeholder="品名（例：黑框灰片折疊）"
+                  className="flex-1 rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#572A87]"
+                />
                 <input
                   value={row.label}
                   onChange={e => update(row.id, 'label', e.target.value)}
-                  placeholder={`情境 ${i + 1}（選填，例：蝦皮售價）`}
-                  className="w-full max-w-xs rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#572A87]"
+                  placeholder={`通路 / 情境（例：蝦皮）`}
+                  className="w-44 rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#572A87]"
                 />
                 {rows.length > 1 && (
-                  <button onClick={() => removeRow(row.id)} className="ml-3 text-slate-300 hover:text-red-400 transition-colors">
+                  <button onClick={() => removeRow(row.id)} className="text-slate-300 hover:text-red-400 transition-colors">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 )}
