@@ -5517,6 +5517,8 @@ function ReorderAlertPage() {
     try { return JSON.parse(localStorage.getItem('inv_arrival') || '{}'); } catch { return {}; }
   });
 
+  const [dbLoaded, setDbLoaded] = useState(false);
+
   // 從 DB 載入在途量 / 到貨日，覆蓋 localStorage 初始值
   useEffect(() => {
     if (!supabase) return;
@@ -5532,8 +5534,38 @@ function ReorderAlertPage() {
       setArrivalMap(arrival);
       localStorage.setItem('inv_inTransit', JSON.stringify(transit));
       localStorage.setItem('inv_arrival', JSON.stringify(arrival));
+      setDbLoaded(true);
     });
   }, []);
+
+  // 庫存快照日期確定後，自動清除「預計到貨日 ≤ 快照日期」的已到貨記錄
+  useEffect(() => {
+    if (!supabase || !dbLoaded || !latestSnapshotDate) return;
+    const expiredSkus = Object.entries(arrivalMap)
+      .filter(([, date]) => date && date <= latestSnapshotDate)
+      .map(([sku]) => sku);
+    if (expiredSkus.length === 0) return;
+
+    // 更新本地 state
+    setArrivalMap(prev => {
+      const next = { ...prev };
+      expiredSkus.forEach(sku => delete next[sku]);
+      localStorage.setItem('inv_arrival', JSON.stringify(next));
+      return next;
+    });
+    setInTransitMap(prev => {
+      const next = { ...prev };
+      expiredSkus.forEach(sku => delete next[sku]);
+      localStorage.setItem('inv_inTransit', JSON.stringify(next));
+      return next;
+    });
+
+    // 更新 DB
+    supabase.from('reorder_settings').upsert(
+      expiredSkus.map(sku => ({ sku, in_transit_qty: 0, arrival_date: null, updated_at: new Date().toISOString() })),
+      { onConflict: 'sku' }
+    );
+  }, [dbLoaded, latestSnapshotDate]);
 
   async function saveReorderSetting(sku: string, inTransit: number, arrival: string) {
     if (!supabase) return;
