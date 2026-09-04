@@ -1764,7 +1764,7 @@ function ProductForm({ row, vendors, onSave, onCancel }: { row: Row | null; vend
     ['status', '狀態', 'select', statusOptions.map(([v, l]) => [v, l])],
     ['current_stage', '目前階段', 'select', stageOptions.map((s) => [s, s])],
     ['target_launch_date', '預計上架日', 'date'],
-    ['estimated_arrival_date', '預估到貨日', 'date'],
+    ['estimated_arrival_date', '實際到貨日', 'date'],
     ['estimated_retail_price', '定價', 'number'],
     ['attachment_url', '附件連結'],
     ['spec_summary', '規格摘要', 'textarea'],
