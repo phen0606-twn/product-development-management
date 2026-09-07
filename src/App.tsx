@@ -4779,9 +4779,48 @@ function Summary({ title, rows, valueLabel }: { title: string; rows: Array<{ lab
 function ChannelSummary({ rows }: { rows: Array<{ label: string; quantity: number; revenue: number }> }) {
   const getColor = (label: string, i: number) => CHANNEL_COLORS[label] ?? CHART_PALETTE[i % CHART_PALETTE.length];
   const total = sum(rows, 'revenue');
+  const STORE_LABELS = new Set(['街邊店', '捷運門市', '加盟門市']);
+  const storeTotal = rows.filter(r => STORE_LABELS.has(r.label)).reduce((s, r) => s + r.revenue, 0);
   let cursor = 0;
   const gradient = rows.map((r, i) => { const start = cursor; cursor += total ? r.revenue / total * 100 : 0; return `${getColor(r.label, i)} ${start}% ${cursor}%`; }).join(', ') || '#e2e8f0 0 100%';
-  return <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft"><h3 className="mb-4 font-semibold">通路業績</h3><div className="space-y-3">{rows.map((r, i) => <div key={r.label} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"><p><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}<span className="ml-2 text-slate-500">{total ? (r.revenue / total * 100).toFixed(1) : 0}%</span></p><p className="font-semibold text-leaf">{formatCurrency(r.revenue)}</p></div>)}<div className="grid gap-5 border-t pt-5 md:grid-cols-[260px_1fr] md:items-center"><div className="mx-auto grid h-60 w-60 place-items-center rounded-full" style={{ background: `conic-gradient(${gradient})` }}><div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-sm"><p className="text-center text-sm font-semibold">{formatCurrency(total)}</p></div></div><div>{rows.map((r, i) => <p key={r.label} className="mb-2 text-sm"><span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />{r.label}</p>)}</div></div></div></section>;
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+      <h3 className="mb-4 font-semibold">通路業績</h3>
+      <div className="space-y-3">
+        {rows.map((r, i) => (
+          <div key={r.label} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm">
+            <p>
+              <span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />
+              {r.label}
+              <span className="ml-2 text-slate-500">{total ? (r.revenue / total * 100).toFixed(1) : 0}%</span>
+            </p>
+            <p className="font-semibold text-leaf">{formatCurrency(r.revenue)}</p>
+          </div>
+        ))}
+        {storeTotal > 0 && (
+          <div className="grid grid-cols-[1fr_auto] gap-3 rounded-md border border-slate-300 bg-slate-50 p-3 text-sm">
+            <p className="font-medium text-slate-700">所有門市合計（街邊店＋捷運門市＋加盟門市）</p>
+            <p className="font-semibold text-leaf">{formatCurrency(storeTotal)}</p>
+          </div>
+        )}
+      </div>
+      <div className="grid gap-5 border-t pt-5 md:grid-cols-[260px_1fr] md:items-center">
+        <div className="mx-auto grid h-60 w-60 place-items-center rounded-full" style={{ background: `conic-gradient(${gradient})` }}>
+          <div className="grid h-28 w-28 place-items-center rounded-full bg-white shadow-sm">
+            <p className="text-center text-sm font-semibold">{formatCurrency(total)}</p>
+          </div>
+        </div>
+        <div>
+          {rows.map((r, i) => (
+            <p key={r.label} className="mb-2 text-sm">
+              <span className="mr-2 inline-block h-3 w-3 rounded-full" style={{ backgroundColor: getColor(r.label, i) }} />
+              {r.label}
+            </p>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 // ── 常用 HS Code 預設清單 ─────────────────────────────────────────────────
