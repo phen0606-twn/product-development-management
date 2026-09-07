@@ -5536,6 +5536,16 @@ function ReorderAlertPage() {
 
   const [dbLoaded, setDbLoaded] = useState(false);
 
+  // 必須在 useEffect dep array 引用前先宣告
+  const latestSnapshotDate = useMemo(() => {
+    let d = '';
+    for (const r of inventory.rows) {
+      const date = String(r.recorded_at || '').slice(0, 10);
+      if (date > d) d = date;
+    }
+    return d;
+  }, [inventory.rows]);
+
   // 從 DB 載入在途量 / 到貨日，覆蓋 localStorage 初始值
   useEffect(() => {
     if (!supabase) return;
@@ -5616,15 +5626,6 @@ function ReorderAlertPage() {
       totals.set(sku, entry);
     }
     return [...totals.values()];
-  }, [inventory.rows]);
-
-  const latestSnapshotDate = useMemo(() => {
-    let d = '';
-    for (const r of inventory.rows) {
-      const date = String(r.recorded_at || '').slice(0, 10);
-      if (date > d) d = date;
-    }
-    return d;
   }, [inventory.rows]);
 
   // 全量指標：90天均速、近30天、歷史峰值月、分類標籤
