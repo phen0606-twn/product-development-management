@@ -4054,7 +4054,8 @@ function parseInventoryExcel(data: unknown[][]): ParsedInventory {
       const unitCost = typeof row[3] === 'number' && isFinite(row[3]) ? row[3] : null;
       const qty      = Number(row[5] ?? 0);
       if (!sku || sku === '商品型號' || !isFinite(qty) || qty === 0) continue;
-      records.push({ external_sku: sku, product_name: `${sku} ${name}`.trim(), location: loc, quantity: qty, unit_cost: unitCost });
+      const amt = unitCost != null ? qty * unitCost : 0;
+      records.push({ external_sku: sku, product_name: `${sku} ${name}`.trim(), location: loc, quantity: qty, amount: amt, unit_cost: unitCost });
     }
     return { rows: records, excelTotal };
   }
@@ -4092,13 +4093,14 @@ function parseInventoryExcel(data: unknown[][]): ParsedInventory {
       currentName = label.slice(firstWord.length).trim();
       currentSkuQty = qty;
     } else if (currentSku && qty !== 0 && /^\d{4,6}$|^[A-Z]\d{3}|^0ZZZZ/.test(firstWord)) {
-      // ── 庫點明細行 ── 儲存 quantity 和 unit_cost（由 amount/qty 推算）
+      // ── 庫點明細行 ── 存原始 amt（避免浮點誤差），unit_cost 用於庫存成本
       const unitCost = qty > 0 && amt > 0 ? amt / qty : null;
       locRows.push({
         external_sku: currentSku,
         product_name: `${currentSku} ${currentName}`,
         location: label,
         quantity: qty,
+        amount: amt,
         unit_cost: unitCost,
       });
     }
@@ -4300,7 +4302,7 @@ function ImportPage() {
     setInvRows(rows); setInvFile(file.name); setInvExcelTotal(excelTotal); setInvValidation(null);
     const sheetNote = invSheetName !== workbook.SheetNames[0] ? `（sheet：${invSheetName}）` : '';
     const parsedQty = rows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-    const parsedAmt = rows.reduce((s, r) => s + Number(r.quantity ?? 0) * Number(r.unit_cost ?? 0), 0);
+    const parsedAmt = rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
     if (rows.length === 0) {
       setInvMsg(`未解析到資料${sheetNote}，請確認格式。`); return;
     }
@@ -4324,7 +4326,7 @@ function ImportPage() {
     setInvValidation(null);
     const skus = [...new Set(invRows.map((r) => String(r.external_sku || '')).filter(Boolean))];
     const parsedQty = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-    const parsedAmt = invRows.reduce((s, r) => s + Number(r.quantity ?? 0) * Number(r.unit_cost ?? 0), 0);
+    const parsedAmt = invRows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
     const excelQty  = invExcelTotal?.qty    ?? parsedQty;
     const excelAmt  = invExcelTotal?.amount ?? parsedAmt;
 
@@ -4490,7 +4492,7 @@ function ImportPage() {
         </form>
         {invRows.length > 0 && (() => {
           const parsedQty = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-          const parsedAmt = invRows.reduce((s, r) => s + Number(r.quantity ?? 0) * Number(r.unit_cost ?? 0), 0);
+          const parsedAmt = invRows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
           return (
             <div className="mt-4 rounded-lg border border-slate-100 p-4">
               <div className="flex items-start justify-between">
