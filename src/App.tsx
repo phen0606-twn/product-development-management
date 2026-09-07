@@ -4300,7 +4300,7 @@ function ImportPage() {
     setInvRows(rows); setInvFile(file.name); setInvExcelTotal(excelTotal); setInvValidation(null);
     const sheetNote = invSheetName !== workbook.SheetNames[0] ? `（sheet：${invSheetName}）` : '';
     const parsedQty = rows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-    const parsedAmt = rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+    const parsedAmt = rows.reduce((s, r) => s + Number(r.quantity ?? 0) * Number(r.unit_cost ?? 0), 0);
     if (rows.length === 0) {
       setInvMsg(`未解析到資料${sheetNote}，請確認格式。`); return;
     }
@@ -4324,7 +4324,7 @@ function ImportPage() {
     setInvValidation(null);
     const skus = [...new Set(invRows.map((r) => String(r.external_sku || '')).filter(Boolean))];
     const parsedQty = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-    const parsedAmt = invRows.reduce((s, r) => s + Number(r.amount  ?? 0), 0);
+    const parsedAmt = invRows.reduce((s, r) => s + Number(r.quantity ?? 0) * Number(r.unit_cost ?? 0), 0);
     const excelQty  = invExcelTotal?.qty    ?? parsedQty;
     const excelAmt  = invExcelTotal?.amount ?? parsedAmt;
 
@@ -4490,7 +4490,7 @@ function ImportPage() {
         </form>
         {invRows.length > 0 && (() => {
           const parsedQty = invRows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-          const parsedAmt = invRows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+          const parsedAmt = invRows.reduce((s, r) => s + Number(r.quantity ?? 0) * Number(r.unit_cost ?? 0), 0);
           return (
             <div className="mt-4 rounded-lg border border-slate-100 p-4">
               <div className="flex items-start justify-between">
