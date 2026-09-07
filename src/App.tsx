@@ -3118,14 +3118,26 @@ function InventoryPage() {
     return map;
   }, [skuCosts.rows]);
 
-  const totalInventoryValue = useMemo(() =>
-    currentBySku.reduce((s, r) => {
+  const totalInventoryValue = useMemo(() => {
+    // 優先用 inventory_records 本身的 unit_cost（從 Excel 解析而來）
+    // 同一 SKU 可能跨多個庫點，直接加總各行的 quantity × unit_cost
+    const latestDate = inventory.rows.reduce((d, r) => {
+      const date = String(r.recorded_at || '').slice(0, 10);
+      return date > d ? date : d;
+    }, '');
+    const latestRows = inventory.rows.filter(r => String(r.recorded_at || '').slice(0, 10) === latestDate);
+    const fromExcel = latestRows.reduce((s, r) => {
+      const uc = Number(r.unit_cost ?? 0);
+      return s + Number(r.quantity ?? 0) * uc;
+    }, 0);
+    if (fromExcel > 0) return fromExcel;
+    // Fallback：用 sku_costs 表查單位成本
+    return currentBySku.reduce((s, r) => {
       const sku = String(r.external_sku || '');
       const cost = skuCostMap.get(sku) ?? 0;
       return s + Number(r.quantity ?? 0) * cost;
-    }, 0),
-    [currentBySku, skuCostMap],
-  );
+    }, 0);
+  }, [inventory.rows, currentBySku, skuCostMap]);
 
   const categoryStats = useMemo(() => {
     const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
@@ -4033,14 +4045,16 @@ function parseInventoryExcel(data: unknown[][]): ParsedInventory {
 
   if (isTabular) {
     // ── 格式 A：每行 = 一筆 (SKU, 庫點, 數量) ────────────────────────────
+    // col: [商品型號, 品名規格, 庫點, 單價, 折扣, 庫存]
     const records: Row[] = [];
     for (const row of data.slice(1)) {
-      const sku  = String(row[0] ?? '').trim().toUpperCase();
-      const name = String(row[1] ?? '').trim();
-      const loc  = String(row[2] ?? '').trim();
-      const qty  = Number(row[5] ?? 0);
+      const sku      = String(row[0] ?? '').trim().toUpperCase();
+      const name     = String(row[1] ?? '').trim();
+      const loc      = String(row[2] ?? '').trim();
+      const unitCost = typeof row[3] === 'number' && isFinite(row[3]) ? row[3] : null;
+      const qty      = Number(row[5] ?? 0);
       if (!sku || sku === '商品型號' || !isFinite(qty) || qty === 0) continue;
-      records.push({ external_sku: sku, product_name: `${sku} ${name}`.trim(), location: loc, quantity: qty });
+      records.push({ external_sku: sku, product_name: `${sku} ${name}`.trim(), location: loc, quantity: qty, unit_cost: unitCost });
     }
     return { rows: records, excelTotal };
   }
@@ -4078,13 +4092,14 @@ function parseInventoryExcel(data: unknown[][]): ParsedInventory {
       currentName = label.slice(firstWord.length).trim();
       currentSkuQty = qty;
     } else if (currentSku && qty !== 0 && /^\d{4,6}$|^[A-Z]\d{3}|^0ZZZZ/.test(firstWord)) {
-      // ── 庫點明細行 ── 儲存 quantity 和 amount
+      // ── 庫點明細行 ── 儲存 quantity 和 unit_cost（由 amount/qty 推算）
+      const unitCost = qty > 0 && amt > 0 ? amt / qty : null;
       locRows.push({
         external_sku: currentSku,
         product_name: `${currentSku} ${currentName}`,
         location: label,
         quantity: qty,
-        amount: amt,
+        unit_cost: unitCost,
       });
     }
     // 商品群組小計（如「air方框折疊墨鏡E款」）→ 直接跳過
@@ -4338,12 +4353,12 @@ function ImportPage() {
     }
 
     // ── 步驟 3：分批寫入（每批 500 筆）＋ 逐批驗證寫入數量 ──
-    // 只取 DB 有的欄位（amount 只存在 parsed row 不在 DB schema）
     const rowsWithDate = invRows.map((r) => ({
       external_sku: r.external_sku,
       product_name: r.product_name,
       location: r.location,
       quantity: r.quantity,
+      unit_cost: r.unit_cost ?? null,
       recorded_at: recordDate,
     }));
     const BATCH = 500;
