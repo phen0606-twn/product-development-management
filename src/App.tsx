@@ -5643,6 +5643,7 @@ function ReorderAlertPage() {
     }, { onConflict: 'sku' });
   }
 
+  const [alertTab, setAlertTab] = useState<'sku' | 'product'>('sku');
   const [gbOpen, setGbOpen] = useState(false);
   const [gbEditing, setGbEditing] = useState<Row | null>(null);
   const [gbForm, setGbForm] = useState<Row>({});
@@ -5734,6 +5735,42 @@ function ReorderAlertPage() {
     }).sort((a, b) => b.reorderQty - a.reorderQty);
   }, [sgMetrics, latestBySku, leadDays, safetyDays, inTransitMap]);
 
+  // 按品項（不分色）彙總
+  const productAlerts = useMemo(() => {
+    const groups = new Map<string, typeof sgAlerts[number][]>();
+    for (const r of sgAlerts) {
+      const base = r.sku.slice(0, 9).toUpperCase();
+      const arr = groups.get(base) ?? [];
+      arr.push(r);
+      groups.set(base, arr);
+    }
+    const threshold = leadDays + safetyDays;
+    return [...groups.entries()].map(([baseSku, items]) => {
+      const prod = products.rows.find(p => String(p.sku || '').toUpperCase() === baseSku);
+      const name = prod?.name ?? baseSku;
+      const stock = items.reduce((s, r) => s + r.stock, 0);
+      const inTransit = items.reduce((s, r) => s + r.inTransit, 0);
+      const effectiveStock = stock + inTransit;
+      const dailyRate = items.reduce((s, r) => s + r.dailyRate, 0);
+      const recent30Rate = items.reduce((s, r) => s + r.recent30Rate, 0);
+      const trendRatio = dailyRate > 0 ? recent30Rate / dailyRate : 1;
+      const peakQty = items.reduce((s, r) => s + r.peakQty, 0);
+      const peakMonth = items.reduce((m, r) => (r.peakQty > 0 && r.peakMonth > m ? r.peakMonth : m), '');
+      const peakDailyRate = peakQty / 30;
+      const turnoverDays = dailyRate > 0 ? Math.round(effectiveStock / dailyRate) : 9999;
+      const reorderQty = Math.max(0, Math.ceil(dailyRate * threshold - effectiveStock));
+      const peakTurnoverDays = peakDailyRate > 0 ? Math.round(effectiveStock / peakDailyRate) : 9999;
+      const peakReorderQty = Math.max(0, Math.ceil(peakDailyRate * threshold - effectiveStock));
+      const alert = dailyRate > 0 && turnoverDays < threshold;
+      const peakAlert = peakDailyRate > 0 && peakTurnoverDays < threshold;
+      const hasExplosive = items.some(r => r.label === 'explosive');
+      const hasHot = items.some(r => r.label === 'hot');
+      const allCooling = items.every(r => r.label === 'cooling');
+      const label: 'explosive' | 'hot' | 'cooling' | 'stable' = hasExplosive ? 'explosive' : hasHot ? 'hot' : allCooling ? 'cooling' : 'stable';
+      return { baseSku, name, skuCount: items.length, stock, inTransit, effectiveStock, dailyRate, recent30Rate, trendRatio, peakQty, peakMonth, peakDailyRate, turnoverDays, reorderQty, peakTurnoverDays, peakReorderQty, threshold, alert, peakAlert, label };
+    }).sort((a, b) => b.reorderQty - a.reorderQty);
+  }, [sgAlerts, products.rows, leadDays, safetyDays]);
+
   const gbP90 = useMemo(() => {
     const map = new Map<string, number[]>();
     for (const r of groupBuys.rows) {
@@ -5800,6 +5837,10 @@ function ReorderAlertPage() {
           <div>
             <h3 className="font-semibold text-ink">太陽眼鏡追貨警示</h3>
             <p className="mt-0.5 text-xs text-slate-400">以近 90 天銷量計算日均銷量，週轉天數低於門檻時顯示警示</p>
+            <div className="mt-3 flex gap-1">
+              <button onClick={() => setAlertTab('sku')} className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${alertTab === 'sku' ? 'bg-leaf text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>按顏色（SKU）</button>
+              <button onClick={() => setAlertTab('product')} className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${alertTab === 'product' ? 'bg-leaf text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>按品項（合計）</button>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 text-slate-600">前置時間
@@ -5815,7 +5856,78 @@ function ReorderAlertPage() {
             <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">門檻 {leadDays + safetyDays} 天</span>
           </div>
         </div>
-        {sgAlerts.length === 0 ? (
+        {alertTab === 'product' ? (
+          productAlerts.length === 0 ? (
+            <p className="text-sm text-slate-400">近 90 天內無 AS1SG* 太陽眼鏡銷售資料</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-xs text-slate-400">
+                    <th className="pb-2 text-left font-medium">品項（款式）</th>
+                    <th className="pb-2 text-right font-medium">色數</th>
+                    <th className="pb-2 text-right font-medium">庫存量</th>
+                    <th className="pb-2 text-right font-medium">在途量</th>
+                    <th className="pb-2 text-right font-medium">日均銷量</th>
+                    <th className="pb-2 text-right font-medium">峰值月銷</th>
+                    <th className="pb-2 text-right font-medium">週轉天數</th>
+                    <th className="pb-2 text-right font-medium">極端週轉</th>
+                    <th className="pb-2 text-right font-medium">建議追貨量</th>
+                    <th className="pb-2 text-right font-medium">極端應備量</th>
+                    <th className="pb-2 text-center font-medium">狀態</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productAlerts.map(r => (
+                    <tr key={r.baseSku} className={`border-t ${r.alert ? 'bg-red-50' : ''}`}>
+                      <td className="py-2.5 pr-4">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <div>
+                            <span className="text-slate-700">{r.name}</span>
+                            <span className="ml-2 text-xs text-slate-400">{r.baseSku}</span>
+                          </div>
+                          {r.label === 'explosive' && <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">🔥 爆品</span>}
+                          {r.label === 'hot' && <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">⬆ 熱賣</span>}
+                          {r.label === 'cooling' && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">⬇ 降溫</span>}
+                        </div>
+                      </td>
+                      <td className="py-2.5 pr-4 text-right text-slate-500">{r.skuCount}</td>
+                      <td className="py-2.5 pr-4 text-right">{r.stock.toLocaleString('zh-TW')}</td>
+                      <td className="py-2.5 pr-4 text-right text-blue-600">{r.inTransit > 0 ? r.inTransit.toLocaleString('zh-TW') : '-'}</td>
+                      <td className="py-2.5 pr-4 text-right">
+                        <span className="text-slate-500">{r.dailyRate.toFixed(1)}</span>
+                        {r.trendRatio >= 1.3 && <span className="ml-1 text-xs text-green-600">▲{r.recent30Rate.toFixed(1)}</span>}
+                        {r.trendRatio <= 0.7 && <span className="ml-1 text-xs text-slate-400">▼{r.recent30Rate.toFixed(1)}</span>}
+                      </td>
+                      <td className="py-2.5 pr-4 text-right">
+                        {r.peakQty > 0
+                          ? <div><span className={`font-medium ${r.label === 'explosive' ? 'text-orange-600' : 'text-slate-600'}`}>{r.peakQty.toLocaleString('zh-TW')}</span><span className="ml-1 text-xs text-slate-400">{r.peakMonth}</span></div>
+                          : <span className="text-slate-300">-</span>}
+                      </td>
+                      <td className={`py-2.5 pr-4 text-right font-semibold ${r.alert ? 'text-red-600' : r.turnoverDays < r.threshold * 1.2 ? 'text-amber-600' : 'text-green-700'}`}>
+                        {r.turnoverDays >= 9999 ? '∞' : `${r.turnoverDays} 天`}
+                      </td>
+                      <td className={`py-2.5 pr-4 text-right font-semibold ${r.peakDailyRate > 0 && r.peakAlert ? 'text-red-600' : r.peakDailyRate > 0 && r.peakTurnoverDays < r.threshold * 1.2 ? 'text-amber-600' : 'text-slate-400'}`}>
+                        {r.peakDailyRate > 0 ? (r.peakTurnoverDays >= 9999 ? '∞' : `${r.peakTurnoverDays} 天`) : '-'}
+                      </td>
+                      <td className="py-2.5 pr-4 text-right">{r.alert && r.reorderQty > 0 ? `${r.reorderQty.toLocaleString('zh-TW')} 件` : '-'}</td>
+                      <td className={`py-2.5 pr-4 text-right ${r.peakAlert && r.peakReorderQty > 0 ? 'font-semibold text-orange-600' : 'text-slate-400'}`}>
+                        {r.peakDailyRate > 0 && r.peakReorderQty > 0 ? `${r.peakReorderQty.toLocaleString('zh-TW')} 件` : '-'}
+                      </td>
+                      <td className="py-2.5 text-center">
+                        {r.alert
+                          ? <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">⚠ 需追貨</span>
+                          : r.turnoverDays < r.threshold * 1.2
+                            ? <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">留意</span>
+                            : <span className="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">正常</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : sgAlerts.length === 0 ? (
           <p className="text-sm text-slate-400">近 90 天內無 AS1SG* 太陽眼鏡銷售資料</p>
         ) : (
           <div className="overflow-x-auto">
