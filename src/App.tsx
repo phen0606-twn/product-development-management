@@ -5771,7 +5771,8 @@ function ReorderAlertPage() {
       const recent30Rate = items.reduce((s, r) => s + r.recent30Rate, 0);
       const trendRatio = dailyRate > 0 ? recent30Rate / dailyRate : 1;
       const peakQty = items.reduce((s, r) => s + r.peakQty, 0);
-      const peakMonth = items.reduce((m, r) => (r.peakQty > 0 && r.peakMonth > m ? r.peakMonth : m), '');
+      // 取個別顏色中峰值最高那個月份（不是最晚的月份）
+      const peakMonth = items.reduce((best, r) => r.peakQty > best.qty ? { qty: r.peakQty, month: r.peakMonth } : best, { qty: 0, month: '' }).month;
       const peakDailyRate = peakQty / 30;
       const turnoverDays = dailyRate > 0 ? Math.round(effectiveStock / dailyRate) : 9999;
       const reorderQty = Math.max(0, Math.ceil(dailyRate * threshold - effectiveStock));
