@@ -5747,7 +5747,11 @@ function ReorderAlertPage() {
     const threshold = leadDays + safetyDays;
     return [...groups.entries()].map(([baseSku, items]) => {
       const prod = products.rows.find(p => String(p.sku || '').toUpperCase() === baseSku);
-      const name = prod?.name ?? baseSku;
+      // 去掉第一筆 item 名稱的 SKU 前綴（e.g. "AS1SG0007BK1 黑框灰片 super-thin折疊" → "黑框灰片 super-thin折疊"）
+      const firstName = items[0]?.name ?? '';
+      const firstSku = items[0]?.sku ?? '';
+      const strippedName = firstName.startsWith(firstSku) ? firstName.slice(firstSku.length).trim() : firstName;
+      const name = prod?.name ?? strippedName || baseSku;
       const stock = items.reduce((s, r) => s + r.stock, 0);
       const inTransit = items.reduce((s, r) => s + r.inTransit, 0);
       const effectiveStock = stock + inTransit;
