@@ -5747,11 +5747,21 @@ function ReorderAlertPage() {
     const threshold = leadDays + safetyDays;
     return [...groups.entries()].map(([baseSku, items]) => {
       const prod = products.rows.find(p => String(p.sku || '').toUpperCase() === baseSku);
-      // 去掉第一筆 item 名稱的 SKU 前綴（e.g. "AS1SG0007BK1 黑框灰片 super-thin折疊" → "黑框灰片 super-thin折疊"）
-      const firstName = items[0]?.name ?? '';
-      const firstSku = items[0]?.sku ?? '';
-      const strippedName = firstName.startsWith(firstSku) ? firstName.slice(firstSku.length).trim() : firstName;
-      const name = prod?.name ?? strippedName || baseSku;
+      // 去掉各顏色名稱的 SKU 前綴，再求公共後綴 = 款式名（去掉顏色描述）
+      // e.g. ["黑框灰片 super-thin折疊", "黑框黃片 super-thin折疊", "灰框淺灰片 super-thin折疊"] → "super-thin折疊"
+      const stripped = items.map(item => (item.name ?? '').replace(/^AS1SG\w+\s*/i, '').trim()).filter(Boolean);
+      const modelName = (() => {
+        if (stripped.length === 0) return '';
+        if (stripped.length === 1) return stripped[0];
+        let common = stripped[0];
+        for (const s of stripped.slice(1)) {
+          let ci = common.length, si = s.length;
+          while (ci > 0 && si > 0 && common[ci - 1] === s[si - 1]) { ci--; si--; }
+          common = common.slice(ci).trimStart();
+        }
+        return common || stripped[0];
+      })();
+      const name = prod?.name ?? modelName || baseSku;
       const stock = items.reduce((s, r) => s + r.stock, 0);
       const inTransit = items.reduce((s, r) => s + r.inTransit, 0);
       const effectiveStock = stock + inTransit;
