@@ -5746,11 +5746,10 @@ function ReorderAlertPage() {
     }
     const threshold = leadDays + safetyDays;
     return [...groups.entries()].map(([baseSku, items]) => {
-      // 寬鬆比對：exact → prefix → startsWith，找出 products 表的款式名
-      const prod = products.rows.find(p => {
-        const pSku = String(p.sku || '').trim().toUpperCase().replace(/[-\s]/g, '');
-        return pSku === baseSku || baseSku.startsWith(pSku) || pSku.startsWith(baseSku);
-      });
+      // 精確比對（大小寫不分、忽略前後空白），避免前綴誤中其他商品
+      const prod = products.rows.find(p =>
+        String(p.sku || '').trim().toUpperCase() === baseSku
+      );
       // 從各顏色 name 去掉 SKU 前綴後求公共後綴（= 去色描述的款式名）
       const stripped = items.map(item => (item.name ?? '').replace(/^AS1SG\w+\s*/i, '').trim()).filter(Boolean);
       const modelName = (() => {
