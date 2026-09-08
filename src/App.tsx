@@ -5746,9 +5746,12 @@ function ReorderAlertPage() {
     }
     const threshold = leadDays + safetyDays;
     return [...groups.entries()].map(([baseSku, items]) => {
-      const prod = products.rows.find(p => String(p.sku || '').toUpperCase() === baseSku);
-      // 去掉各顏色名稱的 SKU 前綴，再求公共後綴 = 款式名（去掉顏色描述）
-      // e.g. ["黑框灰片 super-thin折疊", "黑框黃片 super-thin折疊", "灰框淺灰片 super-thin折疊"] → "super-thin折疊"
+      // 寬鬆比對：exact → prefix → startsWith，找出 products 表的款式名
+      const prod = products.rows.find(p => {
+        const pSku = String(p.sku || '').trim().toUpperCase().replace(/[-\s]/g, '');
+        return pSku === baseSku || baseSku.startsWith(pSku) || pSku.startsWith(baseSku);
+      });
+      // 從各顏色 name 去掉 SKU 前綴後求公共後綴（= 去色描述的款式名）
       const stripped = items.map(item => (item.name ?? '').replace(/^AS1SG\w+\s*/i, '').trim()).filter(Boolean);
       const modelName = (() => {
         if (stripped.length === 0) return '';
@@ -5761,7 +5764,7 @@ function ReorderAlertPage() {
         }
         return common || stripped[0];
       })();
-      const name = prod?.name ?? modelName || baseSku;
+      const prodName = prod?.name ?? modelName;
       const stock = items.reduce((s, r) => s + r.stock, 0);
       const inTransit = items.reduce((s, r) => s + r.inTransit, 0);
       const effectiveStock = stock + inTransit;
@@ -5781,7 +5784,7 @@ function ReorderAlertPage() {
       const hasHot = items.some(r => r.label === 'hot');
       const allCooling = items.every(r => r.label === 'cooling');
       const label: 'explosive' | 'hot' | 'cooling' | 'stable' = hasExplosive ? 'explosive' : hasHot ? 'hot' : allCooling ? 'cooling' : 'stable';
-      return { baseSku, name, skuCount: items.length, stock, inTransit, effectiveStock, dailyRate, recent30Rate, trendRatio, peakQty, peakMonth, peakDailyRate, turnoverDays, reorderQty, peakTurnoverDays, peakReorderQty, threshold, alert, peakAlert, label };
+      return { baseSku, prodName, skuCount: items.length, stock, inTransit, effectiveStock, dailyRate, recent30Rate, trendRatio, peakQty, peakMonth, peakDailyRate, turnoverDays, reorderQty, peakTurnoverDays, peakReorderQty, threshold, alert, peakAlert, label };
     }).sort((a, b) => b.reorderQty - a.reorderQty);
   }, [sgAlerts, products.rows, leadDays, safetyDays]);
 
@@ -5878,7 +5881,8 @@ function ReorderAlertPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-100 text-xs text-slate-400">
-                    <th className="pb-2 text-left font-medium">品項（款式）</th>
+                    <th className="pb-2 text-left font-medium">品項</th>
+                    <th className="pb-2 text-left font-medium">品名</th>
                     <th className="pb-2 text-right font-medium">色數</th>
                     <th className="pb-2 text-right font-medium">庫存量</th>
                     <th className="pb-2 text-right font-medium">在途量</th>
@@ -5894,12 +5898,10 @@ function ReorderAlertPage() {
                 <tbody>
                   {productAlerts.map(r => (
                     <tr key={r.baseSku} className={`border-t ${r.alert ? 'bg-red-50' : ''}`}>
+                      <td className="py-2.5 pr-3 font-mono text-slate-700">{r.baseSku}</td>
                       <td className="py-2.5 pr-4">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <div>
-                            <span className="text-slate-700">{r.name}</span>
-                            <span className="ml-2 text-xs text-slate-400">{r.baseSku}</span>
-                          </div>
+                          <span className="text-slate-700">{r.prodName || '-'}</span>
                           {r.label === 'explosive' && <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">🔥 爆品</span>}
                           {r.label === 'hot' && <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">⬆ 熱賣</span>}
                           {r.label === 'cooling' && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">⬇ 降溫</span>}
