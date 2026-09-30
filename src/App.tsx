@@ -1,7 +1,7 @@
 import { Component, Fragment, FormEvent, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, BarChart3, Boxes, Calculator, Copy, DollarSign, LayoutDashboard, LayoutGrid, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users } from 'lucide-react';
+import { AlertTriangle, BarChart3, Boxes, Calculator, Copy, DollarSign, LayoutDashboard, LayoutGrid, Package, Pencil, Plus, Settings, Ship, TrendingUp, Trash2, Upload, Users, Layers } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from 'recharts';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 import { formatCurrency, formatFullDate, monthEnd } from './lib/format';
@@ -36,6 +36,7 @@ const nav = [
   ['/customs', '報關試算', Ship, false],
   ['/margin', '毛利計算機', Calculator, false],
   ['/allocation', '分貨計算', LayoutGrid, false],
+  ['/accessories', '配件庫存', Layers, true],
 ] as const;
 
 // Routes marked adminOnly=true are hidden from viewer role
@@ -169,6 +170,7 @@ export default function App() {
           <Route path="/customs" element={<ErrorBoundary><CustomsCalculationsPage /></ErrorBoundary>} />
           <Route path="/margin" element={<ErrorBoundary><MarginCalculatorPage /></ErrorBoundary>} />
           <Route path="/allocation" element={<ErrorBoundary><AllocationPage /></ErrorBoundary>} />
+          <Route path="/accessories" element={<Guard><ErrorBoundary><AccessoryPage /></ErrorBoundary></Guard>} />
         </Routes>
       </main>
     </div>
@@ -6683,6 +6685,363 @@ function AllocationPage() {
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+function AccessoryPage() {
+  const accessories = useRows('accessories', 'name');
+  const vendors = useRows('vendors');
+  const purchases = useRows('accessory_purchases', 'purchased_at');
+  const allocations = useRows('accessory_allocations', 'allocated_at');
+  const batches = useRows('product_batches', 'ordered_at');
+  const products = useRows('products');
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [accForm, setAccForm] = useState<Row | null>(null);
+  const [purchaseForm, setPurchaseForm] = useState<{ accessoryId: string } | null>(null);
+  const [purchaseData, setPurchaseData] = useState<Row>({});
+  const [allocationForm, setAllocationForm] = useState<{ accessoryId: string } | null>(null);
+  const [allocationData, setAllocationData] = useState<Row>({});
+  const [saving, setSaving] = useState(false);
+
+  const purchasesByAcc = purchases.rows.reduce<Record<string, Row[]>>((acc, p) => {
+    acc[p.accessory_id] = acc[p.accessory_id] ?? [];
+    acc[p.accessory_id].push(p);
+    return acc;
+  }, {});
+
+  const allocationsByAcc = allocations.rows.reduce<Record<string, Row[]>>((acc, a) => {
+    acc[a.accessory_id] = acc[a.accessory_id] ?? [];
+    acc[a.accessory_id].push(a);
+    return acc;
+  }, {});
+
+  function calcStock(accId: string) {
+    const ps = purchasesByAcc[accId] ?? [];
+    const as_ = allocationsByAcc[accId] ?? [];
+    const totalPurchased = ps.filter(p => p.arrived_at).reduce((s, p) => s + (Number(p.quantity) || 0), 0);
+    const totalAllocated = as_.reduce((s, a) => s + (Number(a.quantity) || 0), 0);
+    const totalShipped = as_.filter(a => a.shipped_at).reduce((s, a) => s + (Number(a.quantity) || 0), 0);
+    const totalCost = ps.reduce((s, p) => s + (Number(p.total_cost_twd) || 0), 0);
+    const totalBought = ps.reduce((s, p) => s + (Number(p.quantity) || 0), 0);
+    const avgUnitCost = totalBought > 0 ? totalCost / totalBought : 0;
+    return {
+      totalPurchased,
+      totalAllocated,
+      totalShipped,
+      reserved: totalAllocated - totalShipped,
+      available: totalPurchased - totalAllocated,
+      avgUnitCost,
+    };
+  }
+
+  async function saveAccessory() {
+    if (!supabase || !accForm?.name?.trim()) return;
+    setSaving(true);
+    const payload = clean({ name: accForm.name.trim(), spec: accForm.spec || null, unit: accForm.unit || '個', vendor_id: accForm.vendor_id || null, notes: accForm.notes || null });
+    if (accForm.id) await supabase.from('accessories').update(payload).eq('id', accForm.id);
+    else await supabase.from('accessories').insert(payload);
+    setAccForm(null);
+    setSaving(false);
+    accessories.reload();
+  }
+
+  async function savePurchase() {
+    if (!supabase || !purchaseForm || !purchaseData.quantity || !purchaseData.total_cost_twd) return;
+    setSaving(true);
+    await supabase.from('accessory_purchases').insert(clean({
+      accessory_id: purchaseForm.accessoryId,
+      purchased_at: purchaseData.purchased_at || null,
+      arrived_at: purchaseData.arrived_at || null,
+      quantity: parseNumber(purchaseData.quantity),
+      total_cost_twd: parseNumber(purchaseData.total_cost_twd),
+      notes: purchaseData.notes || null,
+    }));
+    setPurchaseForm(null);
+    setPurchaseData({});
+    setSaving(false);
+    purchases.reload();
+  }
+
+  async function updatePurchaseArrival(purchaseId: string, arrivedAt: string) {
+    if (!supabase) return;
+    await supabase.from('accessory_purchases').update({ arrived_at: arrivedAt || null }).eq('id', purchaseId);
+    purchases.reload();
+  }
+
+  async function saveAllocation() {
+    if (!supabase || !allocationForm || !allocationData.quantity || !allocationData.product_batch_id) return;
+    setSaving(true);
+    await supabase.from('accessory_allocations').insert(clean({
+      accessory_id: allocationForm.accessoryId,
+      product_batch_id: allocationData.product_batch_id,
+      allocated_at: allocationData.allocated_at || null,
+      shipped_at: allocationData.shipped_at || null,
+      quantity: parseNumber(allocationData.quantity),
+      notes: allocationData.notes || null,
+    }));
+    setAllocationForm(null);
+    setAllocationData({});
+    setSaving(false);
+    allocations.reload();
+  }
+
+  async function updateAllocationShipped(allocationId: string, shippedAt: string) {
+    if (!supabase) return;
+    await supabase.from('accessory_allocations').update({ shipped_at: shippedAt || null }).eq('id', allocationId);
+    allocations.reload();
+  }
+
+  async function deletePurchase(id: string) {
+    if (!supabase) return;
+    await supabase.from('accessory_purchases').delete().eq('id', id);
+    purchases.reload();
+  }
+
+  async function deleteAllocation(id: string) {
+    if (!supabase) return;
+    await supabase.from('accessory_allocations').delete().eq('id', id);
+    allocations.reload();
+  }
+
+  const loading = accessories.loading || purchases.loading || allocations.loading;
+
+  return (
+    <div className="space-y-6 p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-ink">配件庫存</h1>
+          <p className="text-sm text-slate-400">管理工廠配件採購與各品項批次的領用分配</p>
+        </div>
+        <button type="button" onClick={() => setAccForm({})} className="rounded-md bg-leaf px-4 py-2 text-sm text-white hover:bg-leaf/90">＋ 新增配件</button>
+      </div>
+
+      {accForm !== null && (
+        <div className="rounded-lg border border-leaf/30 bg-green-50 p-4">
+          <p className="mb-3 text-sm font-medium text-leaf">{accForm.id ? '編輯配件' : '新增配件'}</p>
+          <div className="grid gap-3 md:grid-cols-4">
+            <label className="text-sm md:col-span-2">配件名稱（必填）
+              <input value={accForm.name ?? ''} onChange={(e) => setAccForm({ ...accForm, name: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+            </label>
+            <label className="text-sm">規格
+              <input value={accForm.spec ?? ''} onChange={(e) => setAccForm({ ...accForm, spec: e.target.value })} placeholder="尺寸、材質等" className="mt-1 w-full rounded-md border px-3 py-2" />
+            </label>
+            <label className="text-sm">單位
+              <input value={accForm.unit ?? '個'} onChange={(e) => setAccForm({ ...accForm, unit: e.target.value })} placeholder="個、條、組..." className="mt-1 w-full rounded-md border px-3 py-2" />
+            </label>
+            <label className="text-sm">廠商
+              <select value={accForm.vendor_id ?? ''} onChange={(e) => setAccForm({ ...accForm, vendor_id: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2">
+                <option value="">未指定</option>
+                {vendors.rows.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </label>
+            <label className="text-sm md:col-span-3">備註
+              <input value={accForm.notes ?? ''} onChange={(e) => setAccForm({ ...accForm, notes: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
+            </label>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button type="button" onClick={saveAccessory} disabled={!accForm.name?.trim() || saving} className="rounded-md bg-leaf px-4 py-1.5 text-sm text-white disabled:opacity-40">儲存</button>
+            <button type="button" onClick={() => setAccForm(null)} className="text-sm text-slate-400">取消</button>
+          </div>
+        </div>
+      )}
+
+      {loading && <p className="text-sm text-slate-400">載入中...</p>}
+      {!loading && accessories.rows.length === 0 && <p className="text-sm text-slate-400">尚無配件資料，請點右上角「＋ 新增配件」</p>}
+
+      {!loading && accessories.rows.map((acc) => {
+        const stock = calcStock(acc.id);
+        const vendor = vendors.rows.find(v => v.id === acc.vendor_id);
+        const accPurchases = (purchasesByAcc[acc.id] ?? []).slice().sort((a, b) => String(a.purchased_at).localeCompare(String(b.purchased_at)));
+        const accAllocations = (allocationsByAcc[acc.id] ?? []).slice().sort((a, b) => String(a.allocated_at).localeCompare(String(b.allocated_at)));
+        const isOpen = selectedId === acc.id;
+
+        return (
+          <div key={acc.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
+            {/* 配件標頭 */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-5 py-4 cursor-pointer" onClick={() => setSelectedId(isOpen ? null : acc.id)}>
+              <div className="flex items-center gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-ink">{acc.name}</p>
+                    {acc.spec && <span className="text-xs text-slate-400">{acc.spec}</span>}
+                    {vendor && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{vendor.name}</span>}
+                    <button type="button" onClick={(e) => { e.stopPropagation(); setAccForm(acc); }} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100">編輯</button>
+                  </div>
+                  {acc.notes && <p className="text-xs text-slate-400 mt-0.5">{acc.notes}</p>}
+                </div>
+              </div>
+              <div className="flex gap-4 text-sm">
+                <div className="text-center">
+                  <p className="text-xs text-slate-400">在廠庫存</p>
+                  <p className="font-bold text-ink">{stock.totalPurchased.toLocaleString('zh-TW')} <span className="text-xs font-normal text-slate-400">{acc.unit}</span></p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-slate-400">已預留</p>
+                  <p className="font-semibold text-amber-600">{stock.reserved.toLocaleString('zh-TW')} <span className="text-xs font-normal text-slate-400">{acc.unit}</span></p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-slate-400">可分配</p>
+                  <p className={`font-bold ${stock.available < 0 ? 'text-red-500' : 'text-leaf'}`}>{stock.available.toLocaleString('zh-TW')} <span className="text-xs font-normal text-slate-400">{acc.unit}</span></p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-slate-400">平均單價</p>
+                  <p className="font-semibold text-sun">{stock.avgUnitCost > 0 ? formatCurrency(Math.round(stock.avgUnitCost)) : '-'}</p>
+                </div>
+                <span className="text-slate-300 self-center">{isOpen ? '▲' : '▼'}</span>
+              </div>
+            </div>
+
+            {isOpen && (
+              <div className="divide-y divide-slate-100">
+                {/* 採購記錄 */}
+                <div className="px-5 py-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-medium text-slate-700">採購記錄</p>
+                    <button type="button" onClick={() => { setPurchaseForm({ accessoryId: acc.id }); setPurchaseData({}); }} className="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50">＋ 新增採購</button>
+                  </div>
+                  {purchaseForm?.accessoryId === acc.id && (
+                    <div className="mb-3 grid gap-2 grid-cols-2 md:grid-cols-5 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <label className="text-xs">下單日
+                        <input type="date" value={purchaseData.purchased_at ?? ''} onChange={(e) => setPurchaseData({ ...purchaseData, purchased_at: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <label className="text-xs">到廠日
+                        <input type="date" value={purchaseData.arrived_at ?? ''} onChange={(e) => setPurchaseData({ ...purchaseData, arrived_at: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <label className="text-xs">數量（必填）
+                        <input type="number" value={purchaseData.quantity ?? ''} onChange={(e) => setPurchaseData({ ...purchaseData, quantity: e.target.value })} placeholder={acc.unit} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <label className="text-xs">總費用台幣（必填）
+                        <input type="number" value={purchaseData.total_cost_twd ?? ''} onChange={(e) => setPurchaseData({ ...purchaseData, total_cost_twd: e.target.value })} placeholder="NT$" className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <label className="text-xs md:col-span-1">備註
+                        <input value={purchaseData.notes ?? ''} onChange={(e) => setPurchaseData({ ...purchaseData, notes: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <div className="col-span-2 md:col-span-5 flex gap-2">
+                        <button type="button" onClick={savePurchase} disabled={!purchaseData.quantity || !purchaseData.total_cost_twd || saving} className="rounded bg-slate-700 px-3 py-1 text-xs text-white disabled:opacity-40">儲存</button>
+                        <button type="button" onClick={() => setPurchaseForm(null)} className="text-xs text-slate-400">取消</button>
+                      </div>
+                    </div>
+                  )}
+                  {accPurchases.length === 0 && <p className="text-xs text-slate-300">尚無採購記錄</p>}
+                  {accPurchases.length > 0 && (
+                    <table className="w-full text-xs">
+                      <thead><tr className="text-slate-400 border-b border-slate-100">
+                        <th className="py-1 text-left font-medium">下單日</th>
+                        <th className="py-1 text-left font-medium">到廠日</th>
+                        <th className="py-1 text-right font-medium">數量</th>
+                        <th className="py-1 text-right font-medium">總費用</th>
+                        <th className="py-1 text-right font-medium">單價</th>
+                        <th className="py-1 px-2 text-left font-medium">備註</th>
+                        <th className="py-1"></th>
+                      </tr></thead>
+                      <tbody>
+                        {accPurchases.map((p) => {
+                          const uc = Number(p.quantity) > 0 ? Number(p.total_cost_twd) / Number(p.quantity) : 0;
+                          return (
+                            <tr key={p.id} className="border-b border-slate-50">
+                              <td className="py-1.5 text-slate-600">{p.purchased_at || '-'}</td>
+                              <td className="py-1.5">
+                                {p.arrived_at
+                                  ? <span className="text-leaf">{p.arrived_at}</span>
+                                  : <input type="date" placeholder="填入到廠日" onChange={(e) => updatePurchaseArrival(p.id, e.target.value)} className="rounded border px-1 py-0.5 text-xs text-slate-400 w-32" />
+                                }
+                              </td>
+                              <td className="py-1.5 text-right font-medium">{Number(p.quantity).toLocaleString('zh-TW')} {acc.unit}</td>
+                              <td className="py-1.5 text-right">{formatCurrency(Number(p.total_cost_twd))}</td>
+                              <td className="py-1.5 text-right text-slate-500">{uc > 0 ? formatCurrency(Math.round(uc)) : '-'}</td>
+                              <td className="py-1.5 px-2 text-slate-400">{p.notes || '-'}</td>
+                              <td className="py-1.5 text-right"><button type="button" onClick={() => deletePurchase(p.id)} className="text-slate-300 hover:text-red-400">✕</button></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* 領用記錄 */}
+                <div className="px-5 py-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-medium text-slate-700">領用記錄</p>
+                    <button type="button" onClick={() => { setAllocationForm({ accessoryId: acc.id }); setAllocationData({}); }} className="rounded border border-amber-300 px-2 py-0.5 text-xs text-amber-600 hover:bg-amber-50">＋ 新增領用</button>
+                  </div>
+                  {allocationForm?.accessoryId === acc.id && (
+                    <div className="mb-3 grid gap-2 grid-cols-2 md:grid-cols-5 rounded-md border border-amber-200 bg-amber-50/50 p-3">
+                      <label className="text-xs">品項批次（必填）
+                        <select value={allocationData.product_batch_id ?? ''} onChange={(e) => setAllocationData({ ...allocationData, product_batch_id: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs">
+                          <option value="">請選擇</option>
+                          {batches.rows.map(b => {
+                            const prod = products.rows.find(p => p.id === b.product_id);
+                            return <option key={b.id} value={b.id}>{prod?.name ?? b.product_id} — {b.name}</option>;
+                          })}
+                        </select>
+                      </label>
+                      <label className="text-xs">分配日
+                        <input type="date" value={allocationData.allocated_at ?? ''} onChange={(e) => setAllocationData({ ...allocationData, allocated_at: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <label className="text-xs">出庫日
+                        <input type="date" value={allocationData.shipped_at ?? ''} onChange={(e) => setAllocationData({ ...allocationData, shipped_at: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <label className="text-xs">數量（必填）
+                        <input type="number" value={allocationData.quantity ?? ''} onChange={(e) => setAllocationData({ ...allocationData, quantity: e.target.value })} placeholder={acc.unit} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <label className="text-xs">備註
+                        <input value={allocationData.notes ?? ''} onChange={(e) => setAllocationData({ ...allocationData, notes: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                      </label>
+                      <div className="col-span-2 md:col-span-5 flex gap-2">
+                        <button type="button" onClick={saveAllocation} disabled={!allocationData.quantity || !allocationData.product_batch_id || saving} className="rounded bg-amber-600 px-3 py-1 text-xs text-white disabled:opacity-40">儲存</button>
+                        <button type="button" onClick={() => setAllocationForm(null)} className="text-xs text-slate-400">取消</button>
+                      </div>
+                    </div>
+                  )}
+                  {accAllocations.length === 0 && <p className="text-xs text-slate-300">尚無領用記錄</p>}
+                  {accAllocations.length > 0 && (
+                    <table className="w-full text-xs">
+                      <thead><tr className="text-slate-400 border-b border-slate-100">
+                        <th className="py-1 text-left font-medium">品項批次</th>
+                        <th className="py-1 text-left font-medium">分配日</th>
+                        <th className="py-1 text-left font-medium">出庫日</th>
+                        <th className="py-1 text-right font-medium">數量</th>
+                        <th className="py-1 text-right font-medium">分攤費用</th>
+                        <th className="py-1 px-2 text-left font-medium">備註</th>
+                        <th className="py-1"></th>
+                      </tr></thead>
+                      <tbody>
+                        {accAllocations.map((a) => {
+                          const batch = batches.rows.find(b => b.id === a.product_batch_id);
+                          const prod = batch ? products.rows.find(p => p.id === batch.product_id) : null;
+                          const allocCost = Math.round(Number(a.quantity) * stock.avgUnitCost);
+                          return (
+                            <tr key={a.id} className="border-b border-slate-50">
+                              <td className="py-1.5">
+                                {prod ? <Link to={`/products/${prod.id}`} className="text-leaf hover:underline">{prod.name}</Link> : '-'}
+                                {batch && <span className="ml-1 text-slate-400">— {batch.name}</span>}
+                              </td>
+                              <td className="py-1.5 text-slate-600">{a.allocated_at || '-'}</td>
+                              <td className="py-1.5">
+                                {a.shipped_at
+                                  ? <span className="text-leaf">{a.shipped_at}</span>
+                                  : <input type="date" placeholder="填入出庫日" onChange={(e) => updateAllocationShipped(a.id, e.target.value)} className="rounded border px-1 py-0.5 text-xs text-slate-400 w-32" />
+                                }
+                              </td>
+                              <td className="py-1.5 text-right font-medium">{Number(a.quantity).toLocaleString('zh-TW')} {acc.unit}</td>
+                              <td className="py-1.5 text-right text-sun font-medium">{stock.avgUnitCost > 0 ? formatCurrency(allocCost) : '-'}</td>
+                              <td className="py-1.5 px-2 text-slate-400">{a.notes || '-'}</td>
+                              <td className="py-1.5 text-right"><button type="button" onClick={() => deleteAllocation(a.id)} className="text-slate-300 hover:text-red-400">✕</button></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
