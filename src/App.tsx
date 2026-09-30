@@ -6697,8 +6697,14 @@ function AccessoryPage() {
   const batches = useRows('product_batches', 'ordered_at');
   const products = useRows('products');
 
+  const linkedProductIds = new Set(accessories.rows.map(a => a.product_id).filter(Boolean));
+  const accessoryProducts = products.rows.filter(p =>
+    String(p.category || '').toLowerCase() === 'accessory' && !linkedProductIds.has(p.id)
+  );
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [accForm, setAccForm] = useState<Row | null>(null);
+  const [showImport, setShowImport] = useState(false);
   const [purchaseForm, setPurchaseForm] = useState<{ accessoryId: string } | null>(null);
   const [purchaseData, setPurchaseData] = useState<Row>({});
   const [allocationForm, setAllocationForm] = useState<{ accessoryId: string } | null>(null);
@@ -6739,11 +6745,25 @@ function AccessoryPage() {
   async function saveAccessory() {
     if (!supabase || !accForm?.name?.trim()) return;
     setSaving(true);
-    const payload = clean({ name: accForm.name.trim(), spec: accForm.spec || null, unit: accForm.unit || '個', vendor_id: accForm.vendor_id || null, notes: accForm.notes || null });
+    const payload = clean({ name: accForm.name.trim(), spec: accForm.spec || null, unit: accForm.unit || '個', vendor_id: accForm.vendor_id || null, notes: accForm.notes || null, product_id: accForm.product_id || null });
     if (accForm.id) await supabase.from('accessories').update(payload).eq('id', accForm.id);
     else await supabase.from('accessories').insert(payload);
     setAccForm(null);
     setSaving(false);
+    accessories.reload();
+  }
+
+  async function importFromProduct(prod: Row) {
+    if (!supabase) return;
+    const vendor = vendors.rows.find(v => v.id === prod.vendor_id);
+    await supabase.from('accessories').insert(clean({
+      product_id: prod.id,
+      name: prod.name,
+      spec: prod.spec || null,
+      unit: '個',
+      vendor_id: prod.vendor_id || null,
+      notes: prod.notes || null,
+    }));
     accessories.reload();
   }
 
@@ -6814,8 +6834,35 @@ function AccessoryPage() {
           <h1 className="text-xl font-bold text-ink">配件庫存</h1>
           <p className="text-sm text-slate-400">管理工廠配件採購與各品項批次的領用分配</p>
         </div>
-        <button type="button" onClick={() => setAccForm({})} className="rounded-md bg-leaf px-4 py-2 text-sm text-white hover:bg-leaf/90">＋ 新增配件</button>
+        <div className="flex gap-2">
+          {accessoryProducts.length > 0 && (
+            <button type="button" onClick={() => setShowImport(v => !v)} className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50">從商品管理匯入</button>
+          )}
+          <button type="button" onClick={() => setAccForm({})} className="rounded-md bg-leaf px-4 py-2 text-sm text-white hover:bg-leaf/90">＋ 新增配件</button>
+        </div>
       </div>
+
+      {showImport && accessoryProducts.length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <p className="mb-3 text-sm font-medium text-slate-600">商品管理中的配件（尚未加入配件庫存）</p>
+          <div className="space-y-2">
+            {accessoryProducts.map(prod => {
+              const vendor = vendors.rows.find(v => v.id === prod.vendor_id);
+              return (
+                <div key={prod.id} className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-2.5">
+                  <div>
+                    <span className="text-sm font-medium text-ink">{prod.name}</span>
+                    {prod.sku && <span className="ml-2 text-xs text-slate-400">{prod.sku}</span>}
+                    {vendor && <span className="ml-2 text-xs text-slate-400">{vendor.name}</span>}
+                    {prod.spec && <span className="ml-2 text-xs text-slate-400">{prod.spec}</span>}
+                  </div>
+                  <button type="button" onClick={() => importFromProduct(prod)} className="rounded border border-leaf/40 px-3 py-1 text-xs text-leaf hover:bg-green-50">＋ 加入</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {accForm !== null && (
         <div className="rounded-lg border border-leaf/30 bg-green-50 p-4">
@@ -6853,6 +6900,7 @@ function AccessoryPage() {
       {!loading && accessories.rows.map((acc) => {
         const stock = calcStock(acc.id);
         const vendor = vendors.rows.find(v => v.id === acc.vendor_id);
+        const linkedProduct = acc.product_id ? products.rows.find(p => p.id === acc.product_id) : null;
         const accPurchases = (purchasesByAcc[acc.id] ?? []).slice().sort((a, b) => String(a.purchased_at).localeCompare(String(b.purchased_at)));
         const accAllocations = (allocationsByAcc[acc.id] ?? []).slice().sort((a, b) => String(a.allocated_at).localeCompare(String(b.allocated_at)));
         const isOpen = selectedId === acc.id;
@@ -6867,6 +6915,9 @@ function AccessoryPage() {
                     <p className="font-semibold text-ink">{acc.name}</p>
                     {acc.spec && <span className="text-xs text-slate-400">{acc.spec}</span>}
                     {vendor && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{vendor.name}</span>}
+                    {linkedProduct && (
+                      <Link to={`/products/${linkedProduct.id}`} onClick={e => e.stopPropagation()} className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-500 hover:bg-blue-100">↗ {linkedProduct.name}</Link>
+                    )}
                     <button type="button" onClick={(e) => { e.stopPropagation(); setAccForm(acc); }} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100">編輯</button>
                   </div>
                   {acc.notes && <p className="text-xs text-slate-400 mt-0.5">{acc.notes}</p>}
