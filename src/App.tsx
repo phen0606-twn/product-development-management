@@ -6695,6 +6695,8 @@ function AccessoryPage() {
   const purchases = useRows('accessory_purchases', 'purchased_at');
   const allocations = useRows('accessory_allocations', 'allocated_at');
   const batches = useRows('product_batches', 'ordered_at');
+  const batchDeliveries = useRows('batch_deliveries', 'received_at');
+  const costs = useRows('development_costs');
   const products = useRows('products');
 
   const linkedProductIds = new Set(accessories.rows.map(a => a.product_id).filter(Boolean));
@@ -6755,7 +6757,6 @@ function AccessoryPage() {
 
   async function importFromProduct(prod: Row) {
     if (!supabase) return;
-    const vendor = vendors.rows.find(v => v.id === prod.vendor_id);
     await supabase.from('accessories').insert(clean({
       product_id: prod.id,
       name: prod.name,
@@ -6765,6 +6766,25 @@ function AccessoryPage() {
       notes: prod.notes || null,
     }));
     accessories.reload();
+  }
+
+  async function importBatchAsPurchase(accId: string, batch: Row) {
+    if (!supabase) return;
+    const batchCosts = costsByBatchId[batch.id] ?? [];
+    const totalTWD = batchCosts.reduce((s, c) => s + costTotal(c), 0);
+    const batchDels = (deliveriesByBatchId[batch.id] ?? []).slice().sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
+    const totalReceived = batchDels.reduce((s, d) => s + (Number(d.quantity) || 0), 0);
+    const arrivedAt = batchDels.length > 0 ? batchDels[batchDels.length - 1].received_at : null;
+    const qty = totalReceived > 0 ? totalReceived : (Number(batch.quantity) || 0);
+    await supabase.from('accessory_purchases').insert(clean({
+      accessory_id: accId,
+      purchased_at: batch.ordered_at || null,
+      arrived_at: arrivedAt,
+      quantity: qty || null,
+      total_cost_twd: totalTWD || null,
+      notes: `從批次「${batch.name}」匯入`,
+    }));
+    purchases.reload();
   }
 
   async function savePurchase() {
@@ -6825,7 +6845,16 @@ function AccessoryPage() {
     allocations.reload();
   }
 
-  const loading = accessories.loading || purchases.loading || allocations.loading;
+  const loading = accessories.loading || purchases.loading || allocations.loading || batches.loading || costs.loading;
+
+  const costsByBatchId = costs.rows.reduce<Record<string, Row[]>>((acc, c) => {
+    if (c.batch_id) { acc[c.batch_id] = acc[c.batch_id] ?? []; acc[c.batch_id].push(c); }
+    return acc;
+  }, {});
+  const deliveriesByBatchId = batchDeliveries.rows.reduce<Record<string, Row[]>>((acc, d) => {
+    acc[d.batch_id] = acc[d.batch_id] ?? []; acc[d.batch_id].push(d);
+    return acc;
+  }, {});
 
   return (
     <div className="space-y-6 p-6">
@@ -6946,6 +6975,38 @@ function AccessoryPage() {
 
             {isOpen && (
               <div className="divide-y divide-slate-100">
+                {/* 從商品批次匯入 */}
+                {linkedProduct && (() => {
+                  const prodBatches = batches.rows.filter(b => b.product_id === linkedProduct.id).sort((a, b) => String(a.ordered_at).localeCompare(String(b.ordered_at)));
+                  if (prodBatches.length === 0) return null;
+                  return (
+                    <div className="px-5 py-3 bg-blue-50/40">
+                      <p className="mb-2 text-xs font-medium text-blue-600">來自商品管理的批次（可一鍵匯入為採購記錄）</p>
+                      <div className="space-y-1.5">
+                        {prodBatches.map(b => {
+                          const bCosts = costsByBatchId[b.id] ?? [];
+                          const bTWD = bCosts.reduce((s, c) => s + costTotal(c), 0);
+                          const bDels = (deliveriesByBatchId[b.id] ?? []).sort((a, bb) => String(a.received_at).localeCompare(String(bb.received_at)));
+                          const totalRec = bDels.reduce((s, d) => s + (Number(d.quantity) || 0), 0);
+                          const qty = totalRec > 0 ? totalRec : (Number(b.quantity) || 0);
+                          const arrivedAt = bDels.length > 0 ? bDels[bDels.length - 1].received_at : null;
+                          return (
+                            <div key={b.id} className="flex items-center justify-between rounded border border-blue-100 bg-white px-3 py-2 text-xs">
+                              <div className="flex gap-4">
+                                <span className="font-medium text-ink">{b.name}</span>
+                                {b.ordered_at && <span className="text-slate-400">下單 {b.ordered_at}</span>}
+                                <span className="text-slate-600">{qty.toLocaleString('zh-TW')} {acc.unit}</span>
+                                {arrivedAt && <span className="text-leaf">到廠 {arrivedAt}</span>}
+                                {bTWD > 0 && <span className="text-sun font-medium">{formatCurrency(Math.round(bTWD))}</span>}
+                              </div>
+                              <button type="button" onClick={() => importBatchAsPurchase(acc.id, b)} className="rounded border border-blue-300 px-2 py-0.5 text-blue-600 hover:bg-blue-50">匯入</button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {/* 採購記錄 */}
                 <div className="px-5 py-4">
                   <div className="flex items-center justify-between mb-3">
