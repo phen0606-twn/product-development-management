@@ -951,6 +951,7 @@ function ProductDetailPage() {
   const events = useRows('development_events');
   const costs = useRows('development_costs');
   const batches = useRows('product_batches', 'ordered_at');
+  const deliveries = useRows('batch_deliveries', 'received_at');
   const product = products.rows.find((p) => p.id === id);
   const productProgress = mergeProgressRows(id, progress.rows, events.rows).sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)));
   const productBatches = batches.rows
@@ -991,6 +992,11 @@ function ProductDetailPage() {
   const attributedTotal = allAttributedCosts.reduce((s, c) => s + costTotal(c), 0);
   const fullTotal = directTotal + attributedTotal;
   const totalQty = productBatches.reduce((s, b) => s + (Number(b.quantity) || 0), 0);
+  const deliveriesByBatch = deliveries.rows.reduce<Record<string, Row[]>>((acc, d) => {
+    acc[d.batch_id] = acc[d.batch_id] ?? [];
+    acc[d.batch_id].push(d);
+    return acc;
+  }, {});
   // 重複計算偵測：本商品的費用，但 attributed_to_batch_id 指向其他商品的批次
   // 這些費用會同時出現在「本商品直接費用」和「其他商品的歸入配件費用」中
   const crossProductCosts = productCosts.filter((c) => {
@@ -1007,6 +1013,9 @@ function ProductDetailPage() {
   const [batchSaving, setBatchSaving] = useState(false);
   const [editingBatch, setEditingBatch] = useState<string | null>(null);
   const [editBatchData, setEditBatchData] = useState<Row>({});
+  const [deliveryFormBatch, setDeliveryFormBatch] = useState<string | null>(null);
+  const [deliveryData, setDeliveryData] = useState<Row>({});
+  const [deliverySaving, setDeliverySaving] = useState(false);
   const [costOpen, setCostOpen] = useState(false);
   const [costSaveError, setCostSaveError] = useState('');
 
@@ -1044,7 +1053,6 @@ function ProductDetailPage() {
       name: batchData.name.trim(),
       ordered_at: batchData.ordered_at || null,
       quantity: parseNumber(batchData.quantity) || null,
-      received_quantity: parseNumber(batchData.received_quantity) || null,
       estimated_arrival_date: batchData.estimated_arrival_date || null,
       notes: batchData.notes || null,
     }));
@@ -1060,13 +1068,33 @@ function ProductDetailPage() {
       name: editBatchData.name.trim(),
       ordered_at: editBatchData.ordered_at || null,
       quantity: parseNumber(editBatchData.quantity) || null,
-      received_quantity: parseNumber(editBatchData.received_quantity) || null,
       estimated_arrival_date: editBatchData.estimated_arrival_date || null,
       notes: editBatchData.notes || null,
     })).eq('id', editingBatch);
     setEditingBatch(null);
     setEditBatchData({});
     batches.reload();
+  }
+
+  async function saveDelivery(batchId: string) {
+    if (!supabase || !deliveryData.received_at || !deliveryData.quantity) return;
+    setDeliverySaving(true);
+    await supabase.from('batch_deliveries').insert(clean({
+      batch_id: batchId,
+      received_at: deliveryData.received_at,
+      quantity: parseNumber(deliveryData.quantity),
+      notes: deliveryData.notes || null,
+    }));
+    setDeliveryFormBatch(null);
+    setDeliveryData({});
+    setDeliverySaving(false);
+    deliveries.reload();
+  }
+
+  async function deleteDelivery(deliveryId: string) {
+    if (!supabase) return;
+    await supabase.from('batch_deliveries').delete().eq('id', deliveryId);
+    deliveries.reload();
   }
 
   async function saveProgress(data: Row) {
@@ -1204,11 +1232,8 @@ function ProductDetailPage() {
               <label className="text-sm">下單日期
                 <input type="date" value={batchData.ordered_at ?? ''} onChange={(e) => setBatchData({ ...batchData, ordered_at: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
               </label>
-              <label className="text-sm">下單數量
+              <label className="text-sm">採購數量
                 <input type="number" value={batchData.quantity ?? ''} onChange={(e) => setBatchData({ ...batchData, quantity: e.target.value })} placeholder="件數" className="mt-1 w-full rounded-md border px-3 py-2" />
-              </label>
-              <label className="text-sm">實際到貨量
-                <input type="number" value={batchData.received_quantity ?? ''} onChange={(e) => setBatchData({ ...batchData, received_quantity: e.target.value })} placeholder="到貨後填寫" className="mt-1 w-full rounded-md border px-3 py-2" />
               </label>
               <label className="text-sm">預計到貨日
                 <input type="date" value={batchData.estimated_arrival_date ?? ''} onChange={(e) => setBatchData({ ...batchData, estimated_arrival_date: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
@@ -1235,8 +1260,8 @@ function ProductDetailPage() {
             />
           </div>
         )}
-        {(batches.loading || costs.loading) && <p className="text-sm text-slate-400">載入中...</p>}
-        {!batches.loading && !costs.loading && (
+        {(batches.loading || costs.loading || deliveries.loading) && <p className="text-sm text-slate-400">載入中...</p>}
+        {!batches.loading && !costs.loading && !deliveries.loading && (
           <div className="space-y-4">
             {(costsByBatch['__none__'] ?? []).length > 0 && (
               <div className="overflow-hidden rounded-lg border border-blue-200 bg-blue-50/40">
@@ -1283,8 +1308,9 @@ function ProductDetailPage() {
               const totalTWD = directTWD + attrTWD;
               const paidTWD = batchCosts.filter((c) => !!c.paid_at).reduce((s, c) => s + costTotal(c), 0);
               const orderedQty = Number(batch.quantity) || 0;
-              const receivedQty = batch.received_quantity != null ? Number(batch.received_quantity) : null;
-              const qty = receivedQty ?? orderedQty;
+              const batchDeliveries = (deliveriesByBatch[batch.id] ?? []).slice().sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
+              const totalReceived = batchDeliveries.reduce((s, d) => s + (Number(d.quantity) || 0), 0);
+              const qty = totalReceived > 0 ? totalReceived : orderedQty;
               const unitCost = qty > 0 ? totalTWD / qty : 0;
               return (
                 <div key={batch.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
@@ -1293,12 +1319,12 @@ function ProductDetailPage() {
                       <div className="flex items-center gap-2">
                         <p className="font-semibold text-ink">{batch.name}</p>
                         <button type="button"
-                          onClick={() => { setEditingBatch(batch.id); setEditBatchData({ name: batch.name, ordered_at: batch.ordered_at ?? '', quantity: batch.quantity ?? '', received_quantity: batch.received_quantity ?? '', notes: batch.notes ?? '' }); }}
+                          onClick={() => { setEditingBatch(batch.id); setEditBatchData({ name: batch.name, ordered_at: batch.ordered_at ?? '', quantity: batch.quantity ?? '', notes: batch.notes ?? '' }); }}
                           className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100">編輯</button>
                       </div>
                       <p className="mt-0.5 text-sm text-slate-500">
                         下單日：{batch.ordered_at || '-'}　／　下單：<span className="font-medium text-ink">{orderedQty.toLocaleString('zh-TW')} 件</span>
-                        {receivedQty != null && receivedQty !== orderedQty && <span>　／　到貨：<span className={`font-medium ${receivedQty < orderedQty ? 'text-amber-600' : 'text-leaf'}`}>{receivedQty.toLocaleString('zh-TW')} 件</span></span>}
+                        {totalReceived > 0 && <span>　／　已到貨：<span className={`font-medium ${totalReceived < orderedQty ? 'text-amber-600' : 'text-leaf'}`}>{totalReceived.toLocaleString('zh-TW')} 件</span>（{batchDeliveries.length} 筆）</span>}
                         {batch.estimated_arrival_date && <span>　／　預計到貨：<span className="font-medium text-blue-600">{batch.estimated_arrival_date}</span></span>}
                       </p>
                       {batch.notes && <p className="mt-1 text-xs text-slate-400">{batch.notes}</p>}
@@ -1313,11 +1339,59 @@ function ProductDetailPage() {
                       )}
                       <p className="text-xs text-slate-500">{attrTWD > 0 ? '完整成本（台幣）' : '批次總成本（台幣）'}</p>
                       <p className="text-xl font-bold text-ink">{formatCurrency(totalTWD)}</p>
-                      <p className="mt-1 text-sm text-slate-600">完整單位成本{receivedQty != null ? '（依到貨量）' : ''}：<span className="font-semibold text-sun">{qty > 0 ? formatCurrency(Math.round(unitCost)) : '-'}</span></p>
+                      <p className="mt-1 text-sm text-slate-600">完整單位成本{totalReceived > 0 ? '（依到貨量）' : ''}：<span className="font-semibold text-sun">{qty > 0 ? formatCurrency(Math.round(unitCost)) : '-'}</span></p>
                       {paidTWD < directTWD && (
                         <p className="mt-0.5 text-xs text-amber-500">待付：{formatCurrency(directTWD - paidTWD)}</p>
                       )}
                     </div>
+                  </div>
+                  {/* 到貨記錄區塊 */}
+                  <div className="border-b border-slate-100 px-5 py-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-medium text-slate-500">到貨記錄</p>
+                      <button type="button" onClick={() => { setDeliveryFormBatch(deliveryFormBatch === batch.id ? null : batch.id); setDeliveryData({}); }}
+                        className="rounded border border-leaf/40 px-2 py-0.5 text-xs text-leaf hover:bg-green-50">＋ 新增到貨</button>
+                    </div>
+                    {batchDeliveries.length > 0 && (
+                      <table className="w-full text-xs mb-2">
+                        <thead><tr className="text-slate-400 border-b border-slate-100">
+                          <th className="py-1 text-left font-medium">到貨日</th>
+                          <th className="py-1 text-right font-medium">到貨量</th>
+                          <th className="py-1 px-3 text-left font-medium">備註</th>
+                          <th className="py-1"></th>
+                        </tr></thead>
+                        <tbody>
+                          {batchDeliveries.map((d) => (
+                            <tr key={d.id} className="border-b border-slate-50">
+                              <td className="py-1 text-slate-600">{d.received_at}</td>
+                              <td className="py-1 text-right font-medium text-ink">{Number(d.quantity).toLocaleString('zh-TW')} 件</td>
+                              <td className="py-1 px-3 text-slate-400">{d.notes || '-'}</td>
+                              <td className="py-1 text-right">
+                                <button type="button" onClick={() => deleteDelivery(d.id)} className="text-slate-300 hover:text-red-400 text-xs">✕</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {batchDeliveries.length === 0 && <p className="text-xs text-slate-300">尚無到貨記錄</p>}
+                    {deliveryFormBatch === batch.id && (
+                      <div className="mt-2 grid gap-2 grid-cols-3 rounded-md border border-leaf/20 bg-green-50/50 p-3">
+                        <label className="text-xs">到貨日（必填）
+                          <input type="date" value={deliveryData.received_at ?? ''} onChange={(e) => setDeliveryData({ ...deliveryData, received_at: e.target.value })} className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                        </label>
+                        <label className="text-xs">到貨量（必填）
+                          <input type="number" value={deliveryData.quantity ?? ''} onChange={(e) => setDeliveryData({ ...deliveryData, quantity: e.target.value })} placeholder="件數" className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                        </label>
+                        <label className="text-xs">備註
+                          <input value={deliveryData.notes ?? ''} onChange={(e) => setDeliveryData({ ...deliveryData, notes: e.target.value })} placeholder="選填" className="mt-1 w-full rounded border px-2 py-1 text-xs" />
+                        </label>
+                        <div className="col-span-3 flex gap-2 mt-1">
+                          <button type="button" onClick={() => saveDelivery(batch.id)} disabled={!deliveryData.received_at || !deliveryData.quantity || deliverySaving} className="rounded bg-leaf px-3 py-1 text-xs text-white disabled:opacity-40">{deliverySaving ? '儲存中...' : '儲存'}</button>
+                          <button type="button" onClick={() => setDeliveryFormBatch(null)} className="text-xs text-slate-400">取消</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {editingBatch === batch.id && (
                     <div className="border-b border-slate-100 bg-amber-50/60 px-5 py-4">
@@ -1329,11 +1403,8 @@ function ProductDetailPage() {
                         <label className="text-sm">下單日期
                           <input type="date" value={editBatchData.ordered_at ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, ordered_at: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
                         </label>
-                        <label className="text-sm">下單數量
+                        <label className="text-sm">採購數量
                           <input type="number" value={editBatchData.quantity ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, quantity: e.target.value })} placeholder="件數" className="mt-1 w-full rounded-md border px-3 py-2" />
-                        </label>
-                        <label className="text-sm">實際到貨量
-                          <input type="number" value={editBatchData.received_quantity ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, received_quantity: e.target.value })} placeholder="到貨後填寫" className="mt-1 w-full rounded-md border px-3 py-2" />
                         </label>
                         <label className="text-sm">預計到貨日
                           <input type="date" value={editBatchData.estimated_arrival_date ?? ''} onChange={(e) => setEditBatchData({ ...editBatchData, estimated_arrival_date: e.target.value })} className="mt-1 w-full rounded-md border px-3 py-2" />
