@@ -7087,7 +7087,8 @@ function AccessoryPage() {
                           {batches.rows.map(b => {
                             const prod = products.rows.find(p => p.id === b.product_id);
                             const qty = Number(b.quantity) || 0;
-                            return <option key={b.id} value={b.id}>{prod?.name ?? b.product_id} — {b.name}{qty > 0 ? ` (${qty.toLocaleString('zh-TW')}件)` : ''}</option>;
+                            const skuPart = prod?.sku ? `[${prod.sku}] ` : '';
+                            return <option key={b.id} value={b.id}>{skuPart}{prod?.name ?? b.product_id} — {b.name}{qty > 0 ? ` (${qty.toLocaleString('zh-TW')}件)` : ''}</option>;
                           })}
                         </select>
                       </label>
