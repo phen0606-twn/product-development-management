@@ -4280,6 +4280,96 @@ function ImportPage() {
   };
   const [invValidation, setInvValidation] = useState<InvValidation | null>(null);
 
+  // ── 報關費用 state ──
+  type CustomsCostItem = {
+    sku: string;
+    product_name: string;
+    quantity: number;
+    costs: { deposit_twd: number; final_payment_twd: number; customs_twd: number; freight_twd: number; accessory_twd: number };
+    matched_product_id: string | null;
+    selected_batch_id: string;
+  };
+  type CustomsBatchMeta = { date: string; po_number: string; customer: string; shipping: string };
+  const products = useRows('products', 'name');
+  const batches = useRows('product_batches', 'ordered_at');
+  const [customsMeta, setCustomsMeta] = useState<CustomsBatchMeta | null>(null);
+  const [customsItems, setCustomsItems] = useState<CustomsCostItem[]>([]);
+  const [customsImporting, setCustomsImporting] = useState(false);
+  const [customsMsg, setCustomsMsg] = useState('');
+
+  function loadCustomsFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const json = JSON.parse(ev.target?.result as string);
+        if (!json.items || !json.import_batch) { setCustomsMsg('❌ JSON 格式不符，需包含 import_batch 與 items'); return; }
+        setCustomsMeta(json.import_batch);
+        const items: CustomsCostItem[] = json.items.map((it: CustomsCostItem) => {
+          const matched = products.rows.find((p) => p.sku === it.sku);
+          const batchesForProduct = matched ? batches.rows.filter((b) => b.product_id === matched.id) : [];
+          return {
+            sku: it.sku,
+            product_name: it.product_name,
+            quantity: it.quantity,
+            costs: it.costs,
+            matched_product_id: matched?.id ?? null,
+            selected_batch_id: batchesForProduct[0]?.id ?? '',
+          };
+        });
+        setCustomsItems(items);
+        setCustomsMsg('');
+      } catch { setCustomsMsg('❌ 無法解析 JSON 檔案'); }
+    };
+    reader.readAsText(file);
+  }
+
+  function updateCustomsBatch(sku: string, batchId: string) {
+    setCustomsItems((prev) => prev.map((it) => it.sku === sku ? { ...it, selected_batch_id: batchId } : it));
+  }
+
+  async function doCustomsImport() {
+    if (!supabase || !customsMeta) return;
+    const unmatched = customsItems.filter((it) => !it.selected_batch_id);
+    if (unmatched.length > 0) { setCustomsMsg(`❌ 以下 SKU 尚未指定批次：${unmatched.map((i) => i.sku).join('、')}`); return; }
+    setCustomsImporting(true);
+    const desc = `${customsMeta.po_number} ${customsMeta.date} ${customsMeta.customer} ${customsMeta.shipping}`;
+    const costTypeMap: Array<[keyof CustomsCostItem['costs'], string, string]> = [
+      ['deposit_twd', 'deposit', ''],
+      ['final_payment_twd', 'final_payment', ''],
+      ['customs_twd', 'duty_fee', ''],
+      ['freight_twd', 'shipping_fee', ''],
+      ['accessory_twd', 'other', '配件/加工費'],
+    ];
+    const rows: Row[] = [];
+    for (const item of customsItems) {
+      const batch = batches.rows.find((b) => b.id === item.selected_batch_id);
+      for (const [key, type, custom_type] of costTypeMap) {
+        const amount = item.costs[key];
+        if (!amount) continue;
+        rows.push(clean({
+          product_id: item.matched_product_id,
+          batch_id: item.selected_batch_id,
+          attributed_to_batch_id: item.selected_batch_id,
+          type,
+          custom_type: custom_type || null,
+          description: `${desc}（${item.sku} ${item.quantity}件）`,
+          amount,
+          currency: 'TWD',
+          exchange_rate_to_twd: 1,
+          bank_fee_twd: 0,
+        }));
+      }
+    }
+    const { error } = await supabase.from('development_costs').insert(rows);
+    if (error) { setCustomsMsg(`❌ 匯入失敗：${error.message}`); setCustomsImporting(false); return; }
+    setCustomsMsg(`✅ 匯入完成：${customsItems.length} 個 SKU，${rows.length} 筆費用`);
+    setCustomsItems([]);
+    setCustomsMeta(null);
+    setCustomsImporting(false);
+  }
+
   async function previewSales(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
@@ -4722,6 +4812,77 @@ function ImportPage() {
                 <p className="mt-1 text-xs text-amber-500">正數 = DB 多於 Excel（殘留舊資料）；負數 = DB 少於 Excel（插入失敗）</p>
               </div>
             )}
+          </div>
+        )}
+      </section>
+
+      {/* ── 報關費用匯入 ── */}
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
+        <h3 className="mb-1 font-semibold">報關費用匯入</h3>
+        <p className="mb-4 text-xs text-slate-400">從報關費用計算系統匯出的 JSON 檔案匯入，自動建立各 SKU 的訂金、尾款、關稅、運費與配件費用記錄</p>
+        <label className="text-sm">選擇 JSON 檔案
+          <input type="file" accept=".json" onChange={loadCustomsFile} className="mt-1 w-full rounded-md border px-3 py-2" />
+        </label>
+        {customsMsg && <p className="mt-3 text-sm text-slate-600">{customsMsg}</p>}
+
+        {customsMeta && customsItems.length > 0 && (
+          <div className="mt-4">
+            <div className="mb-3 rounded-md bg-slate-50 p-3 text-sm">
+              <span className="font-medium">{customsMeta.po_number}</span>
+              <span className="ml-3 text-slate-500">{customsMeta.date}｜{customsMeta.customer}｜{customsMeta.shipping}</span>
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-slate-100">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-500">
+                  <tr>
+                    <th className="p-2 text-left">SKU</th>
+                    <th className="p-2 text-left">商品</th>
+                    <th className="p-2 text-right">數量</th>
+                    <th className="p-2 text-right">訂金</th>
+                    <th className="p-2 text-right">尾款</th>
+                    <th className="p-2 text-right">關稅</th>
+                    <th className="p-2 text-right">運費</th>
+                    <th className="p-2 text-right">配件</th>
+                    <th className="p-2 text-left">指定批次</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customsItems.map((item) => {
+                    const productBatches = item.matched_product_id ? batches.rows.filter((b) => b.product_id === item.matched_product_id) : [];
+                    return (
+                      <tr key={item.sku} className="border-t border-slate-100">
+                        <td className="p-2 font-mono text-xs text-slate-500">{item.sku}</td>
+                        <td className="p-2 text-slate-700">{item.product_name}</td>
+                        <td className="p-2 text-right">{item.quantity.toLocaleString('zh-TW')}</td>
+                        <td className="p-2 text-right text-slate-600">{item.costs.deposit_twd ? item.costs.deposit_twd.toLocaleString('zh-TW') : '—'}</td>
+                        <td className="p-2 text-right text-slate-600">{item.costs.final_payment_twd ? item.costs.final_payment_twd.toLocaleString('zh-TW') : '—'}</td>
+                        <td className="p-2 text-right text-slate-600">{item.costs.customs_twd ? item.costs.customs_twd.toLocaleString('zh-TW') : '—'}</td>
+                        <td className="p-2 text-right text-slate-600">{item.costs.freight_twd ? item.costs.freight_twd.toLocaleString('zh-TW') : '—'}</td>
+                        <td className="p-2 text-right text-slate-600">{item.costs.accessory_twd ? item.costs.accessory_twd.toLocaleString('zh-TW') : '—'}</td>
+                        <td className="p-2">
+                          {item.matched_product_id ? (
+                            <select value={item.selected_batch_id} onChange={(e) => updateCustomsBatch(item.sku, e.target.value)}
+                              className="rounded border border-slate-200 px-1 py-0.5 text-xs w-40">
+                              <option value="">— 選擇批次 —</option>
+                              {productBatches.map((b) => (
+                                <option key={b.id} value={b.id}>{b.name}{Number(b.quantity) > 0 ? ` (${Number(b.quantity).toLocaleString('zh-TW')}件)` : ''}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="text-xs text-red-500">⚠ 找不到商品</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button type="button" onClick={() => { setCustomsItems([]); setCustomsMeta(null); }} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
+              <button type="button" onClick={doCustomsImport} disabled={customsImporting} className="rounded-md bg-sun px-4 py-1.5 text-sm text-white disabled:opacity-50">{customsImporting ? '匯入中...' : `確認匯入 ${customsItems.length} 個 SKU`}</button>
+              <span className="text-xs text-slate-400">每個 SKU 最多建立 5 筆費用記錄（訂金、尾款、關稅、運費、配件）</span>
+            </div>
           </div>
         )}
       </section>
