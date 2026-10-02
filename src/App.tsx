@@ -954,6 +954,9 @@ function ProductDetailPage() {
   const costs = useRows('development_costs');
   const batches = useRows('product_batches', 'ordered_at');
   const deliveries = useRows('batch_deliveries', 'received_at');
+  const accAllocations = useRows('accessory_allocations', 'allocated_at');
+  const accPurchases = useRows('accessory_purchases', 'purchased_at');
+  const accessories = useRows('accessories', 'name');
   const product = products.rows.find((p) => p.id === id);
   const productProgress = mergeProgressRows(id, progress.rows, events.rows).sort((a, b) => String(b.started_at || b.created_at).localeCompare(String(a.started_at || a.created_at)));
   const productBatches = batches.rows
@@ -997,6 +1000,21 @@ function ProductDetailPage() {
   const deliveriesByBatch = deliveries.rows.reduce<Record<string, Row[]>>((acc, d) => {
     acc[d.batch_id] = acc[d.batch_id] ?? [];
     acc[d.batch_id].push(d);
+    return acc;
+  }, {});
+  // 配件領用：依 product_batch_id 分組，計算平均單價
+  const accAvgCost = accessories.rows.reduce<Record<string, number>>((acc, a) => {
+    const ps = accPurchases.rows.filter(p => p.accessory_id === a.id);
+    const totalCost = ps.reduce((s, p) => s + Number(p.total_cost_twd || 0), 0);
+    const totalQtyP = ps.reduce((s, p) => s + Number(p.quantity || 0), 0);
+    acc[a.id] = totalQtyP > 0 ? totalCost / totalQtyP : 0;
+    return acc;
+  }, {});
+  const accAllocationsByBatch = accAllocations.rows.reduce<Record<string, Row[]>>((acc, a) => {
+    if (a.product_batch_id) {
+      acc[a.product_batch_id] = acc[a.product_batch_id] ?? [];
+      acc[a.product_batch_id].push(a);
+    }
     return acc;
   }, {});
   // 重複計算偵測：本商品的費用，但 attributed_to_batch_id 指向其他商品的批次
@@ -1307,7 +1325,12 @@ function ProductDetailPage() {
               const batchAttrCosts = attributedByBatch[batch.id] ?? [];
               const directTWD = batchCosts.reduce((s, c) => s + costTotal(c), 0);
               const attrTWD = batchAttrCosts.reduce((s, c) => s + costTotal(c), 0);
-              const totalTWD = directTWD + attrTWD;
+              const batchAccAllocations = accAllocationsByBatch[batch.id] ?? [];
+              const accTWD = batchAccAllocations.reduce((s, a) => {
+                const unitCostAcc = accAvgCost[a.accessory_id] ?? 0;
+                return s + Math.round(Number(a.quantity) * unitCostAcc);
+              }, 0);
+              const totalTWD = directTWD + attrTWD + accTWD;
               const paidTWD = batchCosts.filter((c) => !!c.paid_at).reduce((s, c) => s + costTotal(c), 0);
               const orderedQty = Number(batch.quantity) || 0;
               const batchDeliveries = (deliveriesByBatch[batch.id] ?? []).slice().sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
@@ -1332,14 +1355,15 @@ function ProductDetailPage() {
                       {batch.notes && <p className="mt-1 text-xs text-slate-400">{batch.notes}</p>}
                     </div>
                     <div className="text-right">
-                      {attrTWD > 0 && (
-                        <div className="mb-2 text-xs text-slate-400">
-                          <span>直接費用 {formatCurrency(directTWD)}</span>
-                          <span className="mx-1">＋</span>
-                          <span className="text-moss">配件 {formatCurrency(attrTWD)}</span>
+                      {(attrTWD > 0 || accTWD > 0) && (
+                        <div className="mb-2 text-xs text-slate-400 space-y-0.5">
+                          <div><span>直接費用 {formatCurrency(directTWD)}</span>
+                          {attrTWD > 0 && <><span className="mx-1">＋</span><span className="text-moss">配件歸入 {formatCurrency(attrTWD)}</span></>}
+                          {accTWD > 0 && <><span className="mx-1">＋</span><span className="text-purple-600">配件庫存 {formatCurrency(accTWD)}</span></>}
+                          </div>
                         </div>
                       )}
-                      <p className="text-xs text-slate-500">{attrTWD > 0 ? '完整成本（台幣）' : '批次總成本（台幣）'}</p>
+                      <p className="text-xs text-slate-500">{(attrTWD > 0 || accTWD > 0) ? '完整成本（台幣）' : '批次總成本（台幣）'}</p>
                       <p className="text-xl font-bold text-ink">{formatCurrency(totalTWD)}</p>
                       <p className="mt-1 text-sm text-slate-600">完整單位成本{totalReceived > 0 ? '（依到貨量）' : ''}：<span className="font-semibold text-sun">{qty > 0 ? formatCurrency(Math.round(unitCost)) : '-'}</span></p>
                       {paidTWD < directTWD && (
@@ -1491,6 +1515,35 @@ function ProductDetailPage() {
                             </tr>
                           </tfoot>
                         )}
+                      </table>
+                    </div>
+                  )}
+                  {/* 配件庫存領用費用 */}
+                  {batchAccAllocations.length > 0 && (
+                    <div className="border-t border-purple-100 bg-purple-50/30">
+                      <div className="px-5 py-2 border-b border-purple-100">
+                        <span className="text-xs font-medium text-purple-600">▼ 配件庫存領用</span>
+                      </div>
+                      <table className="w-full min-w-[720px] text-sm">
+                        <tbody className="bg-purple-50/20">
+                          {batchAccAllocations.map(a => {
+                            const acc = accessories.rows.find(ac => ac.id === a.accessory_id);
+                            const unitCostAcc = accAvgCost[a.accessory_id] ?? 0;
+                            const allocCost = Math.round(Number(a.quantity) * unitCostAcc);
+                            return (
+                              <tr key={a.id} className="border-b border-purple-50">
+                                <td className="px-4 py-2 font-medium text-purple-700">{acc?.name ?? '-'}</td>
+                                <td className="px-4 py-2 text-slate-600">{a.notes || (a.allocated_at ? `分配日 ${a.allocated_at}` : '-')}</td>
+                                <td className="px-4 py-2 text-slate-400">{acc?.unit ?? '個'}</td>
+                                <td className="px-4 py-2">{Number(a.quantity).toLocaleString('zh-TW')}</td>
+                                <td className="px-4 py-2 text-slate-400">{unitCostAcc > 0 ? `均價 ${formatCurrency(Math.round(unitCostAcc))}` : '-'}</td>
+                                <td className="px-4 py-2" />
+                                <td className="px-4 py-2 font-semibold text-purple-700">{formatCurrency(allocCost)}</td>
+                                <td className="px-4 py-2" />
+                              </tr>
+                            );
+                          })}
+                        </tbody>
                       </table>
                     </div>
                   )}
