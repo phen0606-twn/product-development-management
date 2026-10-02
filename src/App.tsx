@@ -7055,10 +7055,7 @@ function AccessoryPage() {
                             <tr key={p.id} className="border-b border-slate-50">
                               <td className="py-1.5 text-slate-600">{p.purchased_at || '-'}</td>
                               <td className="py-1.5">
-                                {p.arrived_at
-                                  ? <span className="text-leaf">{p.arrived_at}</span>
-                                  : <input type="date" placeholder="填入到廠日" onChange={(e) => updatePurchaseArrival(p.id, e.target.value)} className="rounded border px-1 py-0.5 text-xs text-slate-400 w-32" />
-                                }
+                                <input type="date" defaultValue={p.arrived_at ?? ''} onChange={(e) => updatePurchaseArrival(p.id, e.target.value)} className={`rounded border px-1 py-0.5 text-xs w-32 ${p.arrived_at ? 'border-transparent text-leaf hover:border-slate-200' : 'border-slate-200 text-slate-400'}`} />
                               </td>
                               <td className="py-1.5 text-right font-medium">{Number(p.quantity).toLocaleString('zh-TW')} {acc.unit}</td>
                               <td className="py-1.5 text-right">{formatCurrency(Number(p.total_cost_twd))}</td>
@@ -7135,10 +7132,7 @@ function AccessoryPage() {
                               </td>
                               <td className="py-1.5 text-slate-600">{a.allocated_at || '-'}</td>
                               <td className="py-1.5">
-                                {a.shipped_at
-                                  ? <span className="text-leaf">{a.shipped_at}</span>
-                                  : <input type="date" placeholder="填入出庫日" onChange={(e) => updateAllocationShipped(a.id, e.target.value)} className="rounded border px-1 py-0.5 text-xs text-slate-400 w-32" />
-                                }
+                                <input type="date" defaultValue={a.shipped_at ?? ''} onChange={(e) => updateAllocationShipped(a.id, e.target.value)} className={`rounded border px-1 py-0.5 text-xs w-32 ${a.shipped_at ? 'border-transparent text-leaf hover:border-slate-200' : 'border-slate-200 text-slate-400'}`} />
                               </td>
                               <td className="py-1.5 text-right font-medium">{Number(a.quantity).toLocaleString('zh-TW')} {acc.unit}</td>
                               <td className="py-1.5 text-right text-sun font-medium">{stock.avgUnitCost > 0 ? formatCurrency(allocCost) : '-'}</td>
