@@ -4367,20 +4367,18 @@ function ImportPage() {
     if (unmatched.length > 0) { setCustomsMsg(`❌ 以下 SKU 尚未指定批次：${unmatched.map((i) => i.sku).join('、')}`); return; }
     setCustomsImporting(true);
     const desc = `${customsMeta.po_number} ${customsMeta.date} ${customsMeta.customer} ${customsMeta.shipping}`;
+    // accessory_twd 不匯入：配件成本已由「配件庫存領用」系統自動計算，避免重複
     const costTypeMap: Array<[keyof CustomsCostItem['costs'], string, string]> = [
       ['deposit_twd', 'deposit', ''],
       ['final_payment_twd', 'final_payment', ''],
       ['customs_twd', 'duty_fee', ''],
       ['freight_twd', 'shipping_fee', ''],
-      ['accessory_twd', 'other', '配件/加工費'],
     ];
 
     // 先刪除每個批次裡相同類型的舊費用（覆蓋）
     for (const item of customsItems) {
-      for (const [, type, custom_type] of costTypeMap) {
-        let q = supabase.from('development_costs').delete().eq('batch_id', item.selected_batch_id).eq('type', type);
-        if (type === 'other') q = q.eq('custom_type', '配件/加工費');
-        await q;
+      for (const [, type] of costTypeMap) {
+        await supabase.from('development_costs').delete().eq('batch_id', item.selected_batch_id).eq('type', type);
       }
     }
 
@@ -4883,7 +4881,7 @@ function ImportPage() {
                     <th className="p-2 text-right">尾款</th>
                     <th className="p-2 text-right">關稅</th>
                     <th className="p-2 text-right">運費</th>
-                    <th className="p-2 text-right">配件</th>
+                    <th className="p-2 text-right text-purple-400">配件（參考）</th>
                     <th className="p-2 text-left">指定批次</th>
                   </tr>
                 </thead>
@@ -4899,7 +4897,7 @@ function ImportPage() {
                         <td className="p-2 text-right text-slate-600">{item.costs.final_payment_twd ? item.costs.final_payment_twd.toLocaleString('zh-TW') : '—'}</td>
                         <td className="p-2 text-right text-slate-600">{item.costs.customs_twd ? item.costs.customs_twd.toLocaleString('zh-TW') : '—'}</td>
                         <td className="p-2 text-right text-slate-600">{item.costs.freight_twd ? item.costs.freight_twd.toLocaleString('zh-TW') : '—'}</td>
-                        <td className="p-2 text-right text-slate-600">{item.costs.accessory_twd ? item.costs.accessory_twd.toLocaleString('zh-TW') : '—'}</td>
+                        <td className="p-2 text-right text-purple-400 text-xs">{item.costs.accessory_twd ? item.costs.accessory_twd.toLocaleString('zh-TW') : '—'}<br/><span className="text-slate-300">由配件庫存系統計算</span></td>
                         <td className="p-2">
                           <select value={item.selected_batch_id} onChange={(e) => updateCustomsBatch(item.sku, e.target.value)}
                             className={`rounded border px-1 py-0.5 text-xs w-44 ${item.matched_product_id ? 'border-slate-200' : 'border-red-300 bg-red-50'}`}>
@@ -4925,7 +4923,7 @@ function ImportPage() {
             <div className="mt-3 flex items-center gap-3">
               <button type="button" onClick={() => { setCustomsItems([]); setCustomsMeta(null); }} className="rounded-md border border-slate-200 px-3 py-1.5 text-sm">取消</button>
               <button type="button" onClick={doCustomsImport} disabled={customsImporting} className="rounded-md bg-sun px-4 py-1.5 text-sm text-white disabled:opacity-50">{customsImporting ? '匯入中...' : `確認匯入 ${customsItems.length} 個 SKU`}</button>
-              <span className="text-xs text-slate-400">每個 SKU 最多建立 5 筆費用記錄（訂金、尾款、關稅、運費、配件）</span>
+              <span className="text-xs text-slate-400">每個 SKU 建立 4 筆費用記錄（訂金、尾款、關稅、運費）；配件成本由配件庫存系統自動計算，不重複匯入</span>
             </div>
           </div>
         )}
