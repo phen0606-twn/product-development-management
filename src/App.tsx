@@ -2341,26 +2341,57 @@ function SalesPage() {
     const allDates = [...new Set(
       sales.rows.map((r) => String(r.sold_at || '').slice(0, 10)).filter(Boolean)
     )].sort();
-    const recent = allDates.slice(-weekCount);
-    return recent.map((date, i) => {
-      const rows = sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === date);
+
+    // 合併相鄰短週：兩個 sold_at 間距 ≤ 5 天視為同一週的分段，合成一個期間
+    const mergedGroups: string[][] = [];
+    for (const date of allDates) {
+      const last = mergedGroups[mergedGroups.length - 1];
+      if (last) {
+        const prevDate = last[last.length - 1];
+        const gap = (new Date(date + 'T00:00:00').getTime() - new Date(prevDate + 'T00:00:00').getTime()) / 86400000;
+        if (gap <= 5) { last.push(date); continue; }
+      }
+      mergedGroups.push([date]);
+    }
+
+    const recent = mergedGroups.slice(-weekCount);
+    const fmt = (x: Date) => `${x.getMonth() + 1}/${x.getDate()}`;
+
+    return recent.map((group, i) => {
+      const rows = sales.rows.filter((r) => group.includes(String(r.sold_at || '').slice(0, 10)));
       const rev = sum(rows, 'revenue');
       const q   = sum(rows, 'quantity');
       const avg = q > 0 ? Math.round(rev / q) : 0;
-      const prevDate = i > 0 ? recent[i - 1] : null;
-      const prevRows = prevDate ? sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === prevDate) : [];
+      const prevGroup = i > 0 ? recent[i - 1] : null;
+      const prevRows = prevGroup ? sales.rows.filter((r) => prevGroup.includes(String(r.sold_at || '').slice(0, 10))) : [];
       const prevRev  = prevRows.length ? sum(prevRows, 'revenue') : null;
-      const d = new Date(date + 'T00:00:00');
-      const fmt = (x: Date) => `${x.getMonth() + 1}/${x.getDate()}`;
-      // 優先使用資料庫存的 week_label（由匯入時從檔名解析）
-      const storedLabel = rows.find((r) => r.week_label)?.week_label as string | undefined;
-      // Fallback：下一個 sold_at 前一天；最後一期 = 當月最後一天
-      const nextDateStr = allDates[allDates.indexOf(date) + 1];
-      const ed = nextDateStr
-        ? (() => { const t = new Date(nextDateStr + 'T00:00:00'); t.setDate(t.getDate() - 1); return t; })()
-        : new Date(d.getFullYear(), d.getMonth() + 1, 0);
-      const weekRange = storedLabel || (ed > d ? `${fmt(d)}-${fmt(ed)}` : fmt(d));
-      return { date, label: weekRange, weekRange,
+
+      // 標籤：取首尾日期，優先用資料庫 week_label 組合
+      const firstDate = group[0];
+      const lastDate = group[group.length - 1];
+      const firstRows = sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === firstDate);
+      const lastRows = sales.rows.filter((r) => String(r.sold_at || '').slice(0, 10) === lastDate);
+      const firstLabel = firstRows.find((r) => r.week_label)?.week_label as string | undefined;
+      const lastLabel = lastRows.find((r) => r.week_label)?.week_label as string | undefined;
+
+      let weekRange: string;
+      if (group.length === 1) {
+        // 單一期間：用原本邏輯
+        const nextGroup = mergedGroups[mergedGroups.indexOf(group) + 1];
+        const nextDateStr = nextGroup?.[0];
+        const d = new Date(firstDate + 'T00:00:00');
+        const ed = nextDateStr
+          ? (() => { const t = new Date(nextDateStr + 'T00:00:00'); t.setDate(t.getDate() - 1); return t; })()
+          : new Date(d.getFullYear(), d.getMonth() + 1, 0);
+        weekRange = firstLabel || (ed > d ? `${fmt(d)}-${fmt(ed)}` : fmt(d));
+      } else {
+        // 合併期間：取第一個 label 的起始日 + 最後一個 label 的結束日
+        const startPart = firstLabel?.split('-')[0] ?? fmt(new Date(firstDate + 'T00:00:00'));
+        const endPart = lastLabel?.split('-').pop() ?? fmt(new Date(lastDate + 'T00:00:00'));
+        weekRange = `${startPart}-${endPart}`;
+      }
+
+      return { date: firstDate, label: weekRange, weekRange,
                revenue: rev, qty: q, avgPrice: avg, prevRevenue: prevRev };
     });
   }, [sales.rows, weekCount]);
