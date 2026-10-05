@@ -1038,6 +1038,7 @@ function ProductDetailPage() {
   const [deliverySaving, setDeliverySaving] = useState(false);
   const [costOpen, setCostOpen] = useState(false);
   const [costSaveError, setCostSaveError] = useState('');
+  const [costEditing, setCostEditing] = useState<Row | null>(null);
 
   async function saveCost(data: Row) {
     if (!supabase) return;
@@ -1059,9 +1060,17 @@ function ProductDetailPage() {
       due_date: data.due_date || null,
       notes: data.notes,
     });
-    const { error } = await supabase.from('development_costs').insert(payload);
+    const { error } = data.id
+      ? await supabase.from('development_costs').update(payload).eq('id', data.id)
+      : await supabase.from('development_costs').insert(payload);
     if (error) { setCostSaveError(`儲存失敗：${error.message}`); return; }
-    setCostOpen(false);
+    setCostOpen(false); setCostEditing(null);
+    costs.reload();
+  }
+
+  async function deleteCost(costId: string) {
+    if (!supabase || !confirm('確定刪除這筆費用嗎？')) return;
+    await supabase.from('development_costs').delete().eq('id', costId);
     costs.reload();
   }
 
@@ -1268,15 +1277,15 @@ function ProductDetailPage() {
             </div>
           </div>
         )}
-        {costOpen && (
+        {(costOpen || costEditing) && (
           <div className="mb-4">
             {costSaveError && <p className="mb-2 text-sm text-red-500">{costSaveError}</p>}
             <CostForm
-              row={{ product_id: id }}
+              row={costEditing ?? { product_id: id }}
               products={products.rows}
               batches={batches.rows.filter((b) => b.product_id === id)}
               onSave={saveCost}
-              onCancel={() => { setCostOpen(false); setCostSaveError(''); }}
+              onCancel={() => { setCostOpen(false); setCostEditing(null); setCostSaveError(''); }}
             />
           </div>
         )}
@@ -1452,7 +1461,7 @@ function ProductDetailPage() {
                       <table className="w-full min-w-[720px] text-sm">
                         <thead className="bg-white text-slate-500">
                           <tr className="border-b border-slate-100">
-                            {['類型', '說明', '幣別', '金額', '匯率', '手續費', '台幣小計', '狀態'].map((h) => (
+                            {['類型', '說明', '幣別', '金額', '匯率', '手續費', '台幣小計', '狀態', ''].map((h) => (
                               <th key={h} className="px-4 py-2.5 text-left font-medium">{h}</th>
                             ))}
                           </tr>
@@ -1472,13 +1481,19 @@ function ProductDetailPage() {
                                   {!!c.paid_at ? '已付款' : '待付款'}
                                 </span>
                               </td>
+                              <td className="px-4 py-2.5">
+                                <div className="flex gap-2">
+                                  <button type="button" onClick={() => { setCostEditing(c); setCostOpen(false); }} className="text-xs text-leaf hover:underline">編輯</button>
+                                  <button type="button" onClick={() => deleteCost(c.id)} className="text-xs text-red-400 hover:underline">刪除</button>
+                                </div>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                         {batchAttrCosts.length > 0 ? (
                           <>
                             <tbody className="bg-moss/5">
-                              <tr><td colSpan={8} className="px-4 py-1.5 text-xs font-medium text-moss border-t border-moss/20">▼ 歸入配件費用</td></tr>
+                              <tr><td colSpan={9} className="px-4 py-1.5 text-xs font-medium text-moss border-t border-moss/20">▼ 歸入配件費用</td></tr>
                               {batchAttrCosts.map((c) => {
                                 const srcProd = products.rows.find((p) => p.id === c.product_id);
                                 return (
@@ -4359,9 +4374,18 @@ function ImportPage() {
       ['freight_twd', 'shipping_fee', ''],
       ['accessory_twd', 'other', '配件/加工費'],
     ];
+
+    // 先刪除每個批次裡相同類型的舊費用（覆蓋）
+    for (const item of customsItems) {
+      for (const [, type, custom_type] of costTypeMap) {
+        let q = supabase.from('development_costs').delete().eq('batch_id', item.selected_batch_id).eq('type', type);
+        if (type === 'other') q = q.eq('custom_type', '配件/加工費');
+        await q;
+      }
+    }
+
     const rows: Row[] = [];
     for (const item of customsItems) {
-      const batch = batches.rows.find((b) => b.id === item.selected_batch_id);
       for (const [key, type, custom_type] of costTypeMap) {
         const amount = item.costs[key];
         if (!amount) continue;
