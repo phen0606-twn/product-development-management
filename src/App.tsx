@@ -4340,7 +4340,10 @@ function ImportPage() {
   }
 
   function updateCustomsBatch(sku: string, batchId: string) {
-    setCustomsItems((prev) => prev.map((it) => it.sku === sku ? { ...it, selected_batch_id: batchId } : it));
+    const batch = batches.rows.find((b) => b.id === batchId);
+    setCustomsItems((prev) => prev.map((it) => it.sku === sku
+      ? { ...it, selected_batch_id: batchId, matched_product_id: batch?.product_id ?? it.matched_product_id }
+      : it));
   }
 
   async function doCustomsImport() {
@@ -4874,17 +4877,20 @@ function ImportPage() {
                         <td className="p-2 text-right text-slate-600">{item.costs.freight_twd ? item.costs.freight_twd.toLocaleString('zh-TW') : '—'}</td>
                         <td className="p-2 text-right text-slate-600">{item.costs.accessory_twd ? item.costs.accessory_twd.toLocaleString('zh-TW') : '—'}</td>
                         <td className="p-2">
-                          {item.matched_product_id ? (
-                            <select value={item.selected_batch_id} onChange={(e) => updateCustomsBatch(item.sku, e.target.value)}
-                              className="rounded border border-slate-200 px-1 py-0.5 text-xs w-40">
-                              <option value="">— 選擇批次 —</option>
-                              {productBatches.map((b) => (
-                                <option key={b.id} value={b.id}>{b.name}{Number(b.quantity) > 0 ? ` (${Number(b.quantity).toLocaleString('zh-TW')}件)` : ''}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span className="text-xs text-red-500">⚠ 找不到商品</span>
-                          )}
+                          <select value={item.selected_batch_id} onChange={(e) => updateCustomsBatch(item.sku, e.target.value)}
+                            className={`rounded border px-1 py-0.5 text-xs w-44 ${item.matched_product_id ? 'border-slate-200' : 'border-red-300 bg-red-50'}`}>
+                            <option value="">— 選擇批次 —</option>
+                            {item.matched_product_id
+                              ? productBatches.map((b) => (
+                                  <option key={b.id} value={b.id}>{b.name}{Number(b.quantity) > 0 ? ` (${Number(b.quantity).toLocaleString('zh-TW')}件)` : ''}</option>
+                                ))
+                              : batches.rows.map((b) => {
+                                  const prod = products.rows.find((p) => p.id === b.product_id);
+                                  const skuPart = prod?.sku ? `[${prod.sku}] ` : '';
+                                  return <option key={b.id} value={b.id}>{skuPart}{prod?.name ?? ''} — {b.name}{Number(b.quantity) > 0 ? ` (${Number(b.quantity).toLocaleString('zh-TW')}件)` : ''}</option>;
+                                })
+                            }
+                          </select>
                         </td>
                       </tr>
                     );
