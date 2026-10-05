@@ -4307,15 +4307,29 @@ function ImportPage() {
         if (!json.items || !json.import_batch) { setCustomsMsg('❌ JSON 格式不符，需包含 import_batch 與 items'); return; }
         setCustomsMeta(json.import_batch);
         const items: CustomsCostItem[] = json.items.map((it: CustomsCostItem) => {
-          const matched = products.rows.find((p) => p.sku === it.sku);
-          const batchesForProduct = matched ? batches.rows.filter((b) => b.product_id === matched.id) : [];
+          // 優先：用 SKU 比對商品（完整或不分大小寫）
+          let matched = products.rows.find((p) => p.sku && p.sku.toUpperCase() === String(it.sku).toUpperCase());
+          let selectedBatchId = '';
+          if (matched) {
+            const batchesForProduct = batches.rows.filter((b) => b.product_id === matched!.id);
+            // 再用數量找最接近的批次
+            const byQty = batchesForProduct.find((b) => Number(b.quantity) === it.quantity);
+            selectedBatchId = byQty?.id ?? batchesForProduct[0]?.id ?? '';
+          } else {
+            // 備用：直接在所有批次裡找數量完全吻合的
+            const batchByQty = batches.rows.find((b) => Number(b.quantity) === it.quantity);
+            if (batchByQty) {
+              matched = products.rows.find((p) => p.id === batchByQty.product_id) ?? null;
+              selectedBatchId = batchByQty.id;
+            }
+          }
           return {
             sku: it.sku,
             product_name: it.product_name,
             quantity: it.quantity,
             costs: it.costs,
             matched_product_id: matched?.id ?? null,
-            selected_batch_id: batchesForProduct[0]?.id ?? '',
+            selected_batch_id: selectedBatchId,
           };
         });
         setCustomsItems(items);
