@@ -3632,6 +3632,77 @@ function InventoryPage() {
         className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 shadow-soft placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-leaf"
       />
 
+      {/* ── 搜尋結果：直接顯示在搜尋框下方 ── */}
+      {trimSearch.length >= 2 && (
+        filteredMerged.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
+            找不到符合「{trimSearch}」的商品
+          </div>
+        ) : (
+          <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
+            <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
+              <span>共 {filteredMerged.length} 個 SKU 符合「{trimSearch}」</span>
+              <button type="button" onClick={() => { setSearch(''); }} className="text-slate-400 hover:text-slate-600">✕ 清除搜尋</button>
+            </div>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-slate-100 text-xs text-slate-500">
+                  <th className="p-3 text-left font-medium">SKU / 商品名稱</th>
+                  <th className="p-3 text-right font-medium">目前庫存</th>
+                  <th className="p-3 text-right font-medium">本月銷量</th>
+                  <th className="p-3 text-right font-medium">銷售率</th>
+                  <th className="w-32 p-3 font-medium">分佈</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleMerged.map((d) => (
+                  <Fragment key={d.sku}>
+                    <tr className="border-t hover:bg-slate-50">
+                      <td className="p-3">
+                        <button type="button" onClick={() => setExpandedSku(expandedSku === d.sku ? null : d.sku)} className="text-left">
+                          <p className="font-mono text-xs text-slate-400">{d.sku}</p>
+                          <p className="text-sm text-leaf hover:underline">{d.name}</p>
+                        </button>
+                      </td>
+                      <td className="p-3 text-right tabular-nums font-medium">{d.stock.toLocaleString('zh-TW')}</td>
+                      <td className="p-3 text-right tabular-nums text-slate-600">{d.sold.toLocaleString('zh-TW')}</td>
+                      <td className="p-3 text-right">
+                        <span className={`text-sm font-medium ${d.rate >= 80 ? 'text-green-600' : d.rate >= 40 ? 'text-amber-500' : 'text-slate-400'}`}>{d.rate.toFixed(0)}%</span>
+                      </td>
+                      <td className="p-3">
+                        <div className="flex h-3 overflow-hidden rounded-sm bg-slate-100">
+                          <div style={{ width: `${Math.min(d.sold / (d.stock + d.sold || 1) * 100, 100)}%` }} className="bg-sun" />
+                          <div style={{ width: `${Math.min(d.stock / (d.stock + d.sold || 1) * 100, 100)}%` }} className="bg-leaf/40" />
+                        </div>
+                      </td>
+                    </tr>
+                    {expandedSku === d.sku && (
+                      <tr><td colSpan={5} className="bg-slate-50 px-6 pb-4 pt-2">
+                        <p className="mb-2 text-xs font-medium text-slate-500">庫存位置明細</p>
+                        <div className="flex flex-wrap gap-2">
+                          {(skuLocations.get(d.sku) ?? []).map((loc) => (
+                            <span key={loc.location} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs">
+                              {loc.location} <span className="font-semibold text-ink">{loc.quantity.toLocaleString('zh-TW')}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </td></tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+            {filteredMerged.length > 15 && (
+              <div className="border-t p-3">
+                <button type="button" onClick={() => setShowAll(!showAll)} className="w-full rounded-md border border-slate-200 py-2 text-sm text-slate-500 hover:bg-slate-50">
+                  {showAll ? '收起' : `展開全部（共 ${filteredMerged.length} 個 SKU）`}
+                </button>
+              </div>
+            )}
+          </section>
+        )
+      )}
+
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
         <p className="mb-3 text-sm font-medium text-slate-500">選擇銷量對比月份</p>
         <div className="flex flex-wrap gap-2">
@@ -4097,11 +4168,11 @@ function InventoryPage() {
         </div>
       )}
 
-      {filteredMerged.length === 0 ? (
+      {trimSearch.length < 2 && filteredMerged.length === 0 ? (
         <div className="rounded-lg border border-dashed border-slate-300 p-10 text-center text-sm text-slate-400">
-          {trimSearch.length >= 2 ? `找不到符合「${trimSearch}」的商品` : '尚無庫存資料，請新增庫存紀錄'}
+          尚無庫存資料，請新增庫存紀錄
         </div>
-      ) : (
+      ) : trimSearch.length < 2 ? (
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft">
           <div className="flex items-center gap-4 border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
             <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-sun" />本月銷量</span>
@@ -4206,7 +4277,7 @@ function InventoryPage() {
             </div>
           )}
         </section>
-      )}
+      ) : null}
 
     </Page>
   );
