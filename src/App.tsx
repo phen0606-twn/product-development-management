@@ -4434,7 +4434,14 @@ function ImportPage() {
     }
     const { error } = await supabase.from('development_costs').insert(rows);
     if (error) { setCustomsMsg(`❌ 匯入失敗：${error.message}`); setCustomsImporting(false); return; }
-    setCustomsMsg(`✅ 匯入完成：${customsItems.length} 個 SKU，${rows.length} 筆費用`);
+
+    // 確認訊息：顯示每個 SKU 實際寫入的批次名稱
+    const batchSummary = customsItems.map((item) => {
+      const b = batches.rows.find((b) => b.id === item.selected_batch_id);
+      const rowCount = rows.filter((r) => r.batch_id === item.selected_batch_id && r.description?.includes(item.sku)).length;
+      return `${item.sku} → ${b?.name ?? item.selected_batch_id}（${rowCount} 筆）`;
+    }).join('\n');
+    setCustomsMsg(`✅ 匯入完成：${customsItems.length} 個 SKU，${rows.length} 筆費用\n${batchSummary}`);
     setCustomsItems([]);
     setCustomsMeta(null);
     setCustomsImporting(false);
@@ -4893,7 +4900,7 @@ function ImportPage() {
         <label className="text-sm">選擇 JSON 檔案
           <input type="file" accept=".json" onChange={loadCustomsFile} className="mt-1 w-full rounded-md border px-3 py-2" />
         </label>
-        {customsMsg && <p className="mt-3 text-sm text-slate-600">{customsMsg}</p>}
+        {customsMsg && <pre className="mt-3 whitespace-pre-wrap text-sm text-slate-600 font-sans">{customsMsg}</pre>}
 
         {customsMeta && customsItems.length > 0 && (
           <div className="mt-4">
