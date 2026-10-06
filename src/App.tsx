@@ -2754,6 +2754,12 @@ function ChannelAnalysisPage() {
   const [crossStart, setCrossStart] = useState('');
   const [crossEnd, setCrossEnd] = useState('');
   const [channelTrendRows, setChannelTrendRows] = useState<Row[]>([]);
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
+  const [channelGroup, setChannelGroup] = useState<'all' | 'online' | 'store' | 'franchise'>('all');
+
+  const effectiveStart = rangeStart || `${selectedMonth}-01`;
+  const effectiveEnd = rangeEnd || monthEnd(selectedMonth);
 
   const monthShortcuts = useMemo(() => {
     const merged = [...recentMonths, ...availableMonths];
@@ -2788,18 +2794,27 @@ function ChannelAnalysisPage() {
       .then(({ data }) => setChannelTrendRows(data ?? []));
   }, [availableMonths]);
 
-  // Fetch data for the selected month directly — avoids the global 3000-row cap
+  // Fetch data for the selected range — avoids the global 3000-row cap
   useEffect(() => {
     if (!supabase) return;
     setLoading(true);
     setSelectedSku('');
-    supabase.from('product_store_sales').select('*').gte('sales_month', `${selectedMonth}-01`).lte('sales_month', monthEnd(selectedMonth)).limit(5000)
+    supabase.from('product_store_sales').select('*').gte('sales_month', effectiveStart).lte('sales_month', effectiveEnd).limit(5000)
       .then(({ data }) => { setMonthRows(data ?? []); setLoading(false); });
-  }, [selectedMonth]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveStart, effectiveEnd]);
+
+  const channelFilteredRows = useMemo(() => {
+    if (channelGroup === 'all') return monthRows;
+    const allowed = channelGroup === 'online' ? ['網路官網／平台']
+      : channelGroup === 'store' ? ['街邊店', '捷運門市']
+      : ['加盟門市'];
+    return monthRows.filter((r) => allowed.includes(String(r.channel_category || '')));
+  }, [monthRows, channelGroup]);
 
   const topByChannel = useMemo(
     () => CHANNELS.map((ch) => {
-      const chRows = monthRows.filter((r) => r.channel_category === ch);
+      const chRows = channelFilteredRows.filter((r) => r.channel_category === ch);
       const storeCount = new Set(chRows.map((r) => String(r.store_name || ''))).size;
       return {
         channel: ch,
@@ -2807,29 +2822,13 @@ function ChannelAnalysisPage() {
         products: rank(group(chRows, (r) => String(r.external_product_name || r.external_sku || '未知'))).slice(0, 3),
       };
     }),
-    [monthRows],
+    [channelFilteredRows],
   );
 
-  // Channel revenue summary for pie chart (aggregated from product_store_sales)
+  // Channel revenue summary (from channelFilteredRows)
   const channelRevenueSummary = useMemo(() => {
-    // 優先使用 channel_sales_records（channelTrendRows），數字最準確
-    // 因為 product_store_sales 在部分月份可能沒有完整的門市分解資料
-    const trendMonthRows = channelTrendRows.filter(
-      (r) => String(r.sales_month || '').slice(0, 7) === selectedMonth
-    );
-    if (trendMonthRows.length > 0) {
-      return CHANNELS
-        .map((ch) => {
-          const rows = trendMonthRows.filter((r) => r.channel_category === ch);
-          const quantity = rows.reduce((s, r) => s + Number(r.quantity ?? 0), 0);
-          const revenue  = rows.reduce((s, r) => s + Number(r.revenue  ?? 0), 0);
-          return { label: ch, quantity, revenue };
-        })
-        .filter((c) => c.revenue > 0 || c.quantity > 0);
-    }
-    // Fallback：若 channelTrendRows 尚未載入此月，改用 product_store_sales 彙總
     const map = new Map<string, { quantity: number; revenue: number }>();
-    for (const r of monthRows) {
+    for (const r of channelFilteredRows) {
       const ch = String(r.channel_category || '');
       const entry = map.get(ch) ?? { quantity: 0, revenue: 0 };
       entry.quantity += Number(r.quantity ?? 0);
@@ -2839,17 +2838,17 @@ function ChannelAnalysisPage() {
     return CHANNELS
       .map((ch) => ({ label: ch, ...(map.get(ch) ?? { quantity: 0, revenue: 0 }) }))
       .filter((c) => c.revenue > 0 || c.quantity > 0);
-  }, [channelTrendRows, monthRows, selectedMonth]);
+  }, [channelFilteredRows]);
 
   // Top 5 stores per physical channel
   const storeTop5 = useMemo(() => {
     const result = new Map<string, Array<{ label: string; quantity: number; revenue: number; rank: number }>>();
     for (const ch of ['街邊店', '捷運門市', '加盟門市']) {
-      const chRows = monthRows.filter((r) => r.channel_category === ch);
+      const chRows = channelFilteredRows.filter((r) => r.channel_category === ch);
       result.set(ch, rank(group(chRows, (r) => String(r.store_name || ''))).slice(0, 5));
     }
     return result;
-  }, [monthRows]);
+  }, [channelFilteredRows]);
 
   // 通路趨勢折線圖資料：每個月一個點，每條線代表一個通路
   const channelTrendChartData = useMemo(() => {
@@ -2868,27 +2867,27 @@ function ChannelAnalysisPage() {
 
   const skuOptions = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const r of monthRows) {
+    for (const r of channelFilteredRows) {
       const sku = String(r.external_sku || '');
       if (sku && !seen.has(sku)) seen.set(sku, String(r.external_product_name || sku));
     }
     return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  }, [monthRows]);
+  }, [channelFilteredRows]);
 
   const topStores = useMemo(() => {
     if (!selectedSku) return [];
-    const rows = monthRows.filter((r) => String(r.external_sku || '') === selectedSku);
+    const rows = channelFilteredRows.filter((r) => String(r.external_sku || '') === selectedSku);
     return rank(group(rows, (r) => `[${r.channel_category}] ${r.store_name}`)).slice(0, 10);
-  }, [monthRows, selectedSku]);
+  }, [channelFilteredRows, selectedSku]);
 
   const storeSearchResults = useMemo(() => {
     const kw = storeSearchKw.trim();
     if (!kw) return null;
-    const rows = monthRows.filter((r) =>
+    const rows = channelFilteredRows.filter((r) =>
       String(r.external_product_name || '').includes(kw) || String(r.external_sku || '').includes(kw)
     );
     return rank(group(rows, (r) => `[${r.channel_category}] ${r.store_name}`)).slice(0, 15);
-  }, [monthRows, storeSearchKw]);
+  }, [channelFilteredRows, storeSearchKw]);
 
   async function searchProductStores() {
     if (!supabase || productKeyword.trim().length < 2) return;
@@ -2922,18 +2921,48 @@ function ChannelAnalysisPage() {
         <DataConsistencyWarning check={consistencyCheck} />
       )}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft">
-        <label className="block text-sm">選擇月份
-          <input type="month" value={selectedMonth} onChange={(e) => chooseMonth(e.target.value)} className="mt-1 w-full max-w-xs rounded-md border border-slate-200 px-3 py-2" />
-        </label>
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="block text-sm">
+            選擇月份
+            <input type="month" value={selectedMonth} onChange={(e) => { chooseMonth(e.target.value); setRangeStart(''); setRangeEnd(''); }} className="mt-1 block w-48 rounded-md border border-slate-200 px-3 py-2" />
+          </label>
+          <div className="flex items-end gap-2">
+            <label className="text-sm">
+              <span className="block text-xs text-slate-500 mb-1">或選日期區間起日</span>
+              <input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </label>
+            <span className="mb-2 text-slate-400">—</span>
+            <label className="text-sm">
+              <span className="block text-xs text-slate-500 mb-1">迄日</span>
+              <input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </label>
+            {(rangeStart || rangeEnd) && (
+              <button type="button" onClick={() => { setRangeStart(''); setRangeEnd(''); }} className="mb-2 rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-50">✕ 清除</button>
+            )}
+          </div>
+        </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {monthShortcuts.map((m) => (
-            <button key={m} type="button" onClick={() => chooseMonth(m)}
-              className={`rounded-md border px-3 py-1.5 text-sm ${m === selectedMonth ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+            <button key={m} type="button" onClick={() => { chooseMonth(m); setRangeStart(''); setRangeEnd(''); }}
+              className={`rounded-md border px-3 py-1.5 text-sm ${m === selectedMonth && !rangeStart && !rangeEnd ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
               {m.replace('-', '/')}
             </button>
           ))}
           {monthShortcuts.length === 0 && <p className="text-sm text-slate-400">尚無資料，請先匯入業績</p>}
         </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {([['all', '全部'], ['online', '線上（平台）'], ['store', '門市（街邊+捷運）'], ['franchise', '加盟']] as const).map(([val, label]) => (
+            <button key={val} type="button" onClick={() => setChannelGroup(val)}
+              className={`rounded-full border px-4 py-1.5 text-sm transition-colors ${channelGroup === val ? 'border-leaf bg-leaf text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {(rangeStart || rangeEnd) && (
+          <p className="mt-2 text-xs text-slate-400">
+            查詢區間：{rangeStart || '最早'} ～ {rangeEnd || '最新'}
+          </p>
+        )}
       </section>
 
       {loading && <p className="text-sm text-slate-400">載入中...</p>}
