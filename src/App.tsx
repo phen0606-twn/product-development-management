@@ -693,6 +693,7 @@ function ProductsPage() {
   const [message, setMessage] = useState('');
   const [filterVendor, setFilterVendor] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'paused' | 'completed'>('all');
+  const [filterName, setFilterName] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
 
   // 各商品的最新進度日期（用於同狀態內排序：由新到舊）
@@ -708,7 +709,11 @@ function ProductsPage() {
 
   // 依狀態順序 + 最新進度日期排序（含廠商篩選）
   const sortedProducts = useMemo(() => {
-    const base = filterVendor ? products.rows.filter((p) => p.vendor_id === filterVendor) : products.rows;
+    const kw = filterName.trim().toLowerCase();
+    const base = products.rows.filter((p) =>
+      (!filterVendor || p.vendor_id === filterVendor) &&
+      (!kw || (p.name ?? '').toLowerCase().includes(kw) || (p.sku ?? '').toLowerCase().includes(kw))
+    );
     return [...base].sort((a, b) => {
       const oa = STATUS_SORT_ORDER[a.status] ?? 9;
       const ob = STATUS_SORT_ORDER[b.status] ?? 9;
@@ -837,7 +842,14 @@ function ProductsPage() {
             <option value="">全部廠商</option>
             {vendors.rows.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
           </select>
-          {filterVendor && <span className="text-sm text-slate-500">共 {sortedProducts.length} 件</span>}
+          <input
+            type="text"
+            value={filterName}
+            onChange={(e) => setFilterName(e.target.value)}
+            placeholder="搜尋品名或 SKU..."
+            className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600 placeholder:text-slate-300 outline-none focus:border-[#984696] w-48"
+          />
+          {(filterVendor || filterName) && <span className="text-sm text-slate-500">共 {sortedProducts.length} 件</span>}
         </div>
         {/* 右側：新增按鈕 */}
         <button onClick={() => { setEditing(null); setOpen(true); }}
