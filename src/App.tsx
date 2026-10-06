@@ -4365,17 +4365,34 @@ function ImportPage() {
         if (!json.items || !json.import_batch) { setCustomsMsg('❌ JSON 格式不符，需包含 import_batch 與 items'); return; }
         setCustomsMeta(json.import_batch);
         const items: CustomsCostItem[] = json.items.map((it: CustomsCostItem) => {
-          // 只用 SKU 比對（不分大小寫）；數量備用比對已移除——不同商品可能有相同批次數量，容易寫錯商品
-          const matched = products.rows.find((p) => p.sku && p.sku.toUpperCase() === String(it.sku).toUpperCase());
+          const skuUpper = String(it.sku).toUpperCase();
+          const nameKw = (it.product_name ?? '').trim().toLowerCase();
+
+          // 第一層：SKU 完全吻合（不分大小寫）
+          let matched = products.rows.find((p) => p.sku && p.sku.toUpperCase() === skuUpper);
+
+          // 第二層：品名完全吻合（不分大小寫、去首尾空格）
+          if (!matched && nameKw) {
+            matched = products.rows.find((p) => (p.name ?? '').trim().toLowerCase() === nameKw);
+          }
+
+          // 第三層：品名包含比對（只有唯一結果才自動選，避免誤配）
+          if (!matched && nameKw.length >= 2) {
+            const nameMatches = products.rows.filter((p) => {
+              const dbName = (p.name ?? '').toLowerCase();
+              return dbName.includes(nameKw) || nameKw.includes(dbName);
+            });
+            if (nameMatches.length === 1) matched = nameMatches[0];
+          }
+
+          // 找到商品後，用批次數量選最接近的批次；找不到則留空讓使用者手動指定
           let selectedBatchId = '';
           if (matched) {
-            const batchesForProduct = batches.rows.filter((b) => b.product_id === matched.id);
-            // SKU 找到商品後，再用數量找最接近的批次
+            const batchesForProduct = batches.rows.filter((b) => b.product_id === matched!.id);
             const byQty = batchesForProduct.find((b) => Number(b.quantity) === it.quantity);
             selectedBatchId = byQty?.id ?? batchesForProduct[0]?.id ?? '';
           }
-          // SKU 找不到商品 → matched_product_id = null, selected_batch_id = ''
-          // 預覽表格會顯示紅框下拉選單，需手動指定
+
           return {
             sku: it.sku,
             product_name: it.product_name,
