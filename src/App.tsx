@@ -2361,7 +2361,8 @@ function SalesPage() {
       if (last) {
         const prevDate = last[last.length - 1];
         const gap = (new Date(date + 'T00:00:00').getTime() - new Date(prevDate + 'T00:00:00').getTime()) / 86400000;
-        if (gap <= 5) { last.push(date); continue; }
+        const totalSpan = (new Date(date + 'T00:00:00').getTime() - new Date(last[0] + 'T00:00:00').getTime()) / 86400000;
+        if (gap <= 5 && totalSpan < 6) { last.push(date); continue; }
       }
       mergedGroups.push([date]);
     }
