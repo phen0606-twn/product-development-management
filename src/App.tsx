@@ -3343,31 +3343,38 @@ function InventoryPage() {
     return map;
   }, [skuCosts.rows]);
 
-  const totalInventoryValue = useMemo(() => {
-    // 優先用 inventory_records 本身的 unit_cost（從 Excel 解析而來）
-    // 同一 SKU 可能跨多個庫點，直接加總各行的 quantity × unit_cost
-    const latestDate = inventory.rows.reduce((d, r) => {
-      const date = String(r.recorded_at || '').slice(0, 10);
-      return date > d ? date : d;
-    }, '');
-    const latestRows = inventory.rows.filter(r => String(r.recorded_at || '').slice(0, 10) === latestDate);
-    const fromExcel = latestRows.reduce((s, r) => {
-      const uc = Number(r.unit_cost ?? 0);
-      return s + Number(r.quantity ?? 0) * uc;
-    }, 0);
-    if (fromExcel > 0) return fromExcel;
-    // Fallback：用 sku_costs 表查單位成本
-    return currentBySku.reduce((s, r) => {
+  // 從 inventory_records.unit_cost 建立每 SKU 加權平均單位成本
+  const skuUnitCostFromInventory = useMemo(() => {
+    const costSum = new Map<string, number>();
+    const qtySum = new Map<string, number>();
+    for (const r of inventory.rows) {
+      if (String(r.recorded_at || '').slice(0, 10) !== latestSnapshotDate) continue;
       const sku = String(r.external_sku || '');
-      const cost = skuCostMap.get(sku) ?? 0;
-      return s + Number(r.quantity ?? 0) * cost;
-    }, 0);
-  }, [inventory.rows, currentBySku, skuCostMap]);
+      if (!sku) continue;
+      const uc = Number(r.unit_cost ?? 0);
+      const qty = Number(r.quantity ?? 0);
+      costSum.set(sku, (costSum.get(sku) ?? 0) + qty * uc);
+      qtySum.set(sku, (qtySum.get(sku) ?? 0) + qty);
+    }
+    const map = new Map<string, number>();
+    for (const [sku, total] of costSum) {
+      const qty = qtySum.get(sku) ?? 0;
+      map.set(sku, qty > 0 ? total / qty : 0);
+    }
+    return map;
+  }, [inventory.rows, latestSnapshotDate]);
+
+  const totalInventoryValue = useMemo(() =>
+    currentBySku.reduce((s, r) => {
+      const sku = String(r.external_sku || '');
+      const uc = skuUnitCostFromInventory.get(sku) ?? skuCostMap.get(sku) ?? 0;
+      return s + Number(r.quantity ?? 0) * uc;
+    }, 0),
+  [currentBySku, skuUnitCostFromInventory, skuCostMap]);
 
   const categoryStats = useMemo(() => {
     const allMonths = [...new Set(sales.rows.map((r) => String(r.sold_at || '').slice(0, 7)).filter(Boolean))].sort();
     const last3 = allMonths.slice(-3);
-    // avg monthly sales per prefix (品項) over last 3 months
     const prefixAvgSales = new Map<string, number>();
     for (const r of sales.rows) {
       const prefix = String(r.external_sku || '').toUpperCase().slice(0, 5);
@@ -3377,16 +3384,17 @@ function InventoryPage() {
     }
     for (const [p, total] of prefixAvgSales) prefixAvgSales.set(p, last3.length ? total / last3.length : 0);
 
-    // Aggregate by 5-char SKU prefix
     const catMap = new Map<string, { label: string; stock: number; value: number; monthlySales: number }>();
     for (const inv of currentBySku) {
       const sku = String(inv.external_sku || '');
       const prefix = sku.toUpperCase().slice(0, 5);
       const label = skuToLabel(sku);
       const qty = Number(inv.quantity ?? 0);
+      // 優先用 inventory_records.unit_cost，確保與頂部成本卡片同源
+      const uc = skuUnitCostFromInventory.get(sku) ?? skuCostMap.get(sku) ?? 0;
       const entry = catMap.get(prefix) ?? { label, stock: 0, value: 0, monthlySales: prefixAvgSales.get(prefix) ?? 0 };
       entry.stock += qty;
-      entry.value += qty * (skuCostMap.get(sku) ?? 0);
+      entry.value += qty * uc;
       catMap.set(prefix, entry);
     }
     const total = [...catMap.values()].reduce((s, v) => s + v.stock, 0) || 1;
@@ -3401,7 +3409,7 @@ function InventoryPage() {
       }))
       .filter((v) => v.stock > 0)
       .sort((a, b) => b.stock - a.stock);
-  }, [currentBySku, skuCostMap, sales.rows]);
+  }, [currentBySku, skuUnitCostFromInventory, skuCostMap, sales.rows]);
 
   const channelDist = useMemo(() => {
     const map = new Map<string, { channel: string; quantity: number; locations: Map<string, number> }>();
@@ -3787,7 +3795,6 @@ function InventoryPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {categoryStats.map((c) => {
-                  // >365 天 → 紅色（滯銷）；180–365 天 → 橘色（偏慢）；≤180 天 → 綠色（健康）
                   const turnRed = c.turnoverDays > 365;
                   const turnOrange = c.turnoverDays >= 180 && c.turnoverDays <= 365;
                   return (
@@ -3816,6 +3823,15 @@ function InventoryPage() {
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-slate-50">
+                  <td className="py-2.5 pr-4 font-semibold text-slate-700">合計</td>
+                  <td className="py-2.5 text-right tabular-nums font-semibold text-slate-700">{categoryStats.reduce((s, c) => s + c.stock, 0).toLocaleString('zh-TW')} 件</td>
+                  <td className="py-2.5 text-right tabular-nums font-semibold text-leaf">{formatCurrency(categoryStats.reduce((s, c) => s + c.value, 0))}</td>
+                  <td className="py-2.5 text-right tabular-nums font-semibold text-slate-700">{categoryStats.reduce((s, c) => s + c.monthlySales, 0).toLocaleString('zh-TW')} 件</td>
+                  <td />
+                </tr>
+              </tfoot>
             </table>
           </div>
         </section>
