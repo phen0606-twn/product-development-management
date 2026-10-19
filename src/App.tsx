@@ -7265,6 +7265,16 @@ function AccessoryPage() {
     allocations.reload();
   }
 
+  async function deleteAccessory(id: string) {
+    if (!supabase || !confirm('確定刪除這個配件？相關採購與領用記錄也會一併刪除。')) return;
+    await supabase.from('accessory_allocations').delete().eq('accessory_id', id);
+    await supabase.from('accessory_purchases').delete().eq('accessory_id', id);
+    await supabase.from('accessories').delete().eq('id', id);
+    accessories.reload();
+    purchases.reload();
+    allocations.reload();
+  }
+
   async function deletePurchase(id: string) {
     if (!supabase) return;
     await supabase.from('accessory_purchases').delete().eq('id', id);
@@ -7380,6 +7390,7 @@ function AccessoryPage() {
                       <Link to={`/products/${linkedProduct.id}`} onClick={e => e.stopPropagation()} className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-500 hover:bg-blue-100">↗ {linkedProduct.name}</Link>
                     )}
                     <button type="button" onClick={(e) => { e.stopPropagation(); setAccForm(acc); }} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-100">編輯</button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); deleteAccessory(acc.id); }} className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-400 hover:bg-red-50">刪除</button>
                   </div>
                   {acc.notes && <p className="text-xs text-slate-400 mt-0.5">{acc.notes}</p>}
                 </div>
