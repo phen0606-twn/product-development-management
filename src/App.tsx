@@ -7425,7 +7425,7 @@ function AccessoryPage() {
                 </div>
                 <div className="text-center">
                   <p className="text-xs text-slate-400">平均單價</p>
-                  <p className="font-semibold text-sun">{stock.avgUnitCost > 0 ? formatCurrency(Math.round(stock.avgUnitCost)) : '-'}</p>
+                  <p className="font-semibold text-sun">{stock.avgUnitCost > 0 ? (stock.avgUnitCost < 1 ? `$${stock.avgUnitCost.toFixed(2)}` : formatCurrency(Math.round(stock.avgUnitCost))) : '-'}</p>
                 </div>
                 <span className="text-slate-300 self-center">{isOpen ? '▲' : '▼'}</span>
               </div>
@@ -7517,7 +7517,7 @@ function AccessoryPage() {
                               </td>
                               <td className="py-1.5 text-right font-medium">{Number(p.quantity).toLocaleString('zh-TW')} {acc.unit}</td>
                               <td className="py-1.5 text-right">{formatCurrency(Number(p.total_cost_twd))}</td>
-                              <td className="py-1.5 text-right text-slate-500">{uc > 0 ? formatCurrency(Math.round(uc)) : '-'}</td>
+                              <td className="py-1.5 text-right text-slate-500">{uc > 0 ? (uc < 1 ? `$${uc.toFixed(2)}` : formatCurrency(Math.round(uc))) : '-'}</td>
                               <td className="py-1.5 px-2 text-slate-400">{p.notes || '-'}</td>
                               <td className="py-1.5 text-right"><button type="button" onClick={() => deletePurchase(p.id)} className="text-slate-300 hover:text-red-400">✕</button></td>
                             </tr>
